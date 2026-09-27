@@ -18,6 +18,7 @@ void set_fatal_handler(FatalHandler handler) noexcept {
 }
 
 void fatal(std::string_view message) noexcept {
+    // relaxed: nothing to synchronise with; see set_fatal_handler().
     if (const FatalHandler handler = g_handler.load(std::memory_order_relaxed)) {
         handler(message);
     }

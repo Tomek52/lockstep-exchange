@@ -37,13 +37,14 @@ std::vector<InstrumentSpec> instruments() {
 }
 
 Command random_command(std::mt19937_64& rng) {
-    std::uniform_int_distribution<std::uint32_t> instrument{1,
-                                                            instrument_count + 1};  // +1: unknown
-    std::uniform_int_distribution<std::int64_t> price{0, 120};                      // 0: invalid
-    std::uniform_int_distribution<std::uint64_t> qty{0, 50};                        // 0: invalid
+    // Only listed instruments: an unknown one is refused by submit() before it
+    // reaches a shard (nothing to replay), which the pipeline tests cover.
+    std::uniform_int_distribution<std::uint32_t> instrument{1, instrument_count};
+    std::uniform_int_distribution<std::int64_t> price{0, 120};  // 0: domain rejects (journaled)
+    std::uniform_int_distribution<std::uint64_t> qty{0, 50};    // 0: domain rejects (journaled)
     std::uniform_int_distribution<int> kind{0, 9};
 
-    const InstrumentId target{instrument(rng) % instrument_count + 1};
+    const InstrumentId target{instrument(rng)};
     if (kind(rng) == 0) {
         return CancelOrder{TraderId{rng() % 5}, target, OrderId{rng() % 64}};
     }
@@ -81,7 +82,14 @@ TEST(ReplayDeterminism, JournalReplayReproducesLiveOutputPerShard) {
             };
             for (int i = 0; i < 2'000; ++i) {
                 const Command command = random_command(rng);
-                while (!engine.submit(command, record)) {  // Overloaded: back off, retry
+                // Retry only on back-pressure; any other refusal is a test bug
+                // and must fail loudly rather than spin forever.
+                for (;;) {
+                    const auto submitted = engine.submit(command, record);
+                    if (submitted || submitted.error() != app::SubmitError::Overloaded) {
+                        EXPECT_TRUE(submitted.has_value()) << app::to_string(submitted.error());
+                        break;
+                    }
                     std::this_thread::yield();
                 }
             }

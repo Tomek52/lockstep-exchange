@@ -118,6 +118,8 @@ void RiskClient::on_events(std::span<const app::PublishedEvent> /*events*/) {
 
 void RiskClient::on_accept(const std::string& sentinel_id) {
     support::info("risk: session accepted by sentinel '{}'", sentinel_id);
+    // release: pairs with the acquire in session_established(); publishes the
+    // session state set up before this point to threads that observe `true`.
     established_.store(true, std::memory_order_release);
     if (!ingress_.broadcast(domain::RiskLinkStatus{.connected = true})) {
         support::warn("risk: could not journal link-up (shutting down)");
@@ -138,6 +140,8 @@ void RiskClient::on_command(const v1::RiskCommand& command) {
 }
 
 void RiskClient::on_session_done(bool was_established, const std::string& reason) {
+    // release: same pairing as in on_accept(); a reader that sees `false`
+    // after a session also sees that session's teardown.
     established_.store(false, std::memory_order_release);
     if (was_established) {
         support::warn("risk: session closed: {}", reason);
