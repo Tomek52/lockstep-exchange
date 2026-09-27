@@ -14,4 +14,4 @@ target_link_options(order_entry_decode_fuzzer PRIVATE -fsanitize=fuzzer)
 # a longer time-boxed session (see .github/workflows/ci.yml).
 add_test(NAME fuzz.order_entry_decode_smoke
   COMMAND order_entry_decode_fuzzer -runs=20000 -seed=1)
-set_tests_properties(fuzz.order_entry_decode_smoke PROPERTIES LABELS "fuzz;grpc")
+set_tests_properties(fuzz.order_entry_decode_smoke PROPERTIES LABELS fuzz)

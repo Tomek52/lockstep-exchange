@@ -2,10 +2,11 @@
 # tests link only what that layer may depend on (ADR-0014).
 #
 # Labels drive preset filters:
-#   unit          fast, deterministic, no network
+#   unit          fast, deterministic, no network, no gRPC
 #   determinism   replay property tests
 #   architecture  include/dependency fitness functions
-#   grpc          links gRPC; excluded from the TSan preset (ADR-0007)
+#   grpc          links gRPC/protobuf; excluded from the TSan preset (ADR-0007)
+#   fuzz          short libFuzzer smoke runs (asan-ubsan preset only)
 
 set(LOCKSTEP_TESTS_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(LOCKSTEP_CORE_DIR ${PROJECT_SOURCE_DIR}/exchange-core)
@@ -17,9 +18,16 @@ function(lockstep_add_test name)
   target_include_directories(${name} PRIVATE ${LOCKSTEP_TESTS_DIR})
   target_link_libraries(${name} PRIVATE
     ${ARG_LINK} lockstep::compile_options GTest::gtest GTest::gmock GTest::gtest_main)
+  # Exactly one label per executable: gtest_discover_tests (CMake 3.28)
+  # flattens list-valued properties, so "unit;grpc" would silently become
+  # "unit" and the TSan preset's label filter would stop excluding gRPC tests.
+  list(LENGTH ARG_LABELS _count)
+  if(NOT _count EQUAL 1)
+    message(FATAL_ERROR "lockstep_add_test(${name}): exactly one label is supported")
+  endif()
   gtest_discover_tests(${name}
     DISCOVERY_MODE PRE_TEST
-    PROPERTIES LABELS "${ARG_LABELS}")
+    PROPERTIES LABELS ${ARG_LABELS})
 endfunction()
 
 # lockstep_add_include_rule(<layer> <root> ALLOWED_PROJECT <prefix>... [ALLOWED_STD <hdr>...])
