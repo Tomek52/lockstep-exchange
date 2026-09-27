@@ -10,6 +10,7 @@
 # time and by include-scanning architecture tests at test time.
 
 add_subdirectory(domain)
+add_subdirectory(concurrency)
 
 if(LOCKSTEP_BUILD_TESTS)
   add_subdirectory(tests)

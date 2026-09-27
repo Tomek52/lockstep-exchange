@@ -40,3 +40,4 @@ endfunction()
 # CMakeLists (docs/tasks/README.md explains how tasks are parallelised).
 add_subdirectory(architecture)
 add_subdirectory(domain)
+add_subdirectory(concurrency)

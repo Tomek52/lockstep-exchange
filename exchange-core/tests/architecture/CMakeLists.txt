@@ -18,3 +18,6 @@ lockstep_add_include_rule(fixture_impure_domain ${CMAKE_CURRENT_SOURCE_DIR}/fixt
   ALLOWED_PROJECT "lockstep/domain/"
   ALLOWED_STD cstdint vector)
 set_tests_properties(architecture.fixture_impure_domain_includes PROPERTIES WILL_FAIL TRUE)
+
+lockstep_add_include_rule(concurrency ${_core}/concurrency
+  ALLOWED_PROJECT "lockstep/concurrency/")
