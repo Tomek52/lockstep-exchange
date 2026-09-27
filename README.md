@@ -1,5 +1,7 @@
 # Lockstep
 
+[![ci](https://github.com/Tomek52/lockstep-exchange/actions/workflows/ci.yml/badge.svg)](https://github.com/Tomek52/lockstep-exchange/actions/workflows/ci.yml)
+
 **A deterministic, lock-free exchange engine in C++23, with a Rust risk sentinel.
 Every state replays in lockstep.**
 
