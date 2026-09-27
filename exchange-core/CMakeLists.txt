@@ -9,3 +9,8 @@
 # Dependency direction is enforced by lockstep_restrict_links() at configure
 # time and by include-scanning architecture tests at test time.
 
+add_subdirectory(domain)
+
+if(LOCKSTEP_BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
