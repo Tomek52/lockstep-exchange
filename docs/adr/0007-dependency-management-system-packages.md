@@ -51,8 +51,9 @@ dropped the `grpc` label and let gRPC tests into the TSan run.
 
 ## Consequences
 
-- Fresh setup measured on WSL2 Ubuntu 24.04: a few minutes, most of it apt
-  downloads.
+- Fresh setup measured in a clean `ubuntu:24.04` container: **160 s** for
+  `scripts/setup-ubuntu.sh --ci` (apt packages, buf, rustup and the pinned
+  toolchain), dominated by downloads.
 - Versions move only when we move to a new Ubuntu LTS: a deliberate, reviewed
   upgrade.
 - gRPC 1.51 is older than upstream. The callback API and everything else we

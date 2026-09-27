@@ -78,7 +78,7 @@ Requires Ubuntu 24.04 (native, WSL2, or a container). On Windows, clone the
 repository inside the WSL filesystem, not under `/mnt/c`.
 
 ```bash
-scripts/setup-ubuntu.sh                 # GCC 14, Clang 19, gRPC, protobuf, GTest, Benchmark, buf, Rust
+scripts/setup-ubuntu.sh                 # ~3 min on a fresh Ubuntu 24.04: GCC 14, Clang 19, gRPC, protobuf, GTest, Benchmark, buf, Rust
 
 # C++: build and test (presets: debug, release, clang-debug, asan-ubsan, tsan)
 cmake --workflow --preset debug
