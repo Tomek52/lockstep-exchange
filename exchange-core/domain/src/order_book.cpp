@@ -37,7 +37,7 @@ Quantity OrderBook::quantity_at(Side side, Price price) const noexcept {
 }
 
 std::size_t OrderBook::order_count() const noexcept {
-    return index_.size();
+    return slot_by_id_.size();
 }
 
 BookSnapshot OrderBook::snapshot() const {
@@ -45,8 +45,8 @@ BookSnapshot OrderBook::snapshot() const {
 }
 
 const RestingOrder* OrderBook::find(OrderId id) const noexcept {
-    const auto it = index_.find(id);
-    return it == index_.end() ? nullptr : &pool_.node(it->second).order;
+    const auto it = slot_by_id_.find(id);
+    return it == slot_by_id_.end() ? nullptr : &pool_.node(it->second).order;
 }
 
 const RestingOrder* OrderBook::front(Side side) const noexcept {
@@ -60,7 +60,7 @@ const RestingOrder* OrderBook::front(Side side) const noexcept {
 
 void OrderBook::rest(const RestingOrder& order, EventBuffer& out) {
     const Index slot = pool_.acquire(order);
-    [[maybe_unused]] const auto [pos, inserted] = index_.try_emplace(order.id, slot);
+    [[maybe_unused]] const auto [pos, inserted] = slot_by_id_.try_emplace(order.id, slot);
     assert(inserted && "order id is already resting");
 
     with_side(order.side, [&](auto& levels) {
@@ -102,8 +102,8 @@ std::expected<Quantity, RejectReason> OrderBook::cancel(OrderId id,
                                                         TraderId requester,
                                                         CancelReason reason,
                                                         EventBuffer& out) {
-    const auto found = index_.find(id);
-    if (found == index_.end()) {
+    const auto found = slot_by_id_.find(id);
+    if (found == slot_by_id_.end()) {
         return std::unexpected(RejectReason::UnknownOrder);
     }
     const Index slot = found->second;
@@ -126,8 +126,8 @@ std::expected<Quantity, RejectReason> OrderBook::cancel(OrderId id,
     return order.remaining;
 }
 
-void OrderBook::remove(Level& level, Index index) noexcept {
-    const OrderPool::Node& node = pool_.node(index);
+void OrderBook::remove(Level& level, Index slot) noexcept {
+    const OrderPool::Node& node = pool_.node(slot);
     if (node.prev == OrderPool::npos) {
         level.head = node.next;
     } else {
@@ -140,8 +140,8 @@ void OrderBook::remove(Level& level, Index index) noexcept {
     }
     --level.count;
     level.total -= node.order.remaining;
-    index_.erase(node.order.id);
-    pool_.release(index);
+    slot_by_id_.erase(node.order.id);
+    pool_.release(slot);
 }
 
 }  // namespace lockstep::domain

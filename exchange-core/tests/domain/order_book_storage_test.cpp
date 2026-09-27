@@ -57,24 +57,30 @@ TEST_F(OrderBookStorageTest, CancellingMiddleOrderPreservesFifoOfTheOthers) {
 TEST_F(OrderBookStorageTest, FindLocatesEachOfTenThousandOrdersOverManyLevels) {
     constexpr std::uint64_t levels_per_side = 100;
     constexpr std::uint64_t orders_per_level = 50;
+    constexpr std::size_t total_orders = 2 * levels_per_side * orders_per_level;
+    constexpr std::int64_t lowest_bid_price = 1'000;
+    constexpr std::int64_t lowest_ask_price = 2'000;
+    constexpr std::uint64_t trader_count = 7;
     std::vector<RestingOrder> rested;
     std::uint64_t next_id = 1;
     // Interleave levels and sides so that no level's orders are contiguous in
     // insertion order: find() must not depend on insertion locality.
     for (std::uint64_t round = 0; round < orders_per_level; ++round) {
         for (std::uint64_t level = 0; level < levels_per_side; ++level) {
-            const auto bid_price = static_cast<std::int64_t>(1'000 + level);
-            const auto ask_price = static_cast<std::int64_t>(2'000 + level);
-            rested.push_back(order(next_id, Side::Buy, bid_price, round + 1, next_id % 7));
+            const std::int64_t bid_price = lowest_bid_price + static_cast<std::int64_t>(level);
+            const std::int64_t ask_price = lowest_ask_price + static_cast<std::int64_t>(level);
+            rested.push_back(
+                order(next_id, Side::Buy, bid_price, round + 1, next_id % trader_count));
             ++next_id;
-            rested.push_back(order(next_id, Side::Sell, ask_price, round + 1, next_id % 7));
+            rested.push_back(
+                order(next_id, Side::Sell, ask_price, round + 1, next_id % trader_count));
             ++next_id;
         }
     }
     for (const RestingOrder& o : rested) {
         book.rest(o, out);
     }
-    ASSERT_EQ(book.order_count(), 10'000U);
+    ASSERT_EQ(book.order_count(), total_orders);
     ASSERT_EQ(book.snapshot().bids.size(), levels_per_side);
     ASSERT_EQ(book.snapshot().asks.size(), levels_per_side);
 
@@ -149,9 +155,8 @@ TEST_F(OrderBookStorageTest, CancelIfByTraderRemovesMatchesInDocumentedOrder) {
     book.rest(order(7, Side::Sell, 105, 7, 2), out);
     out.clear();
 
-    const std::size_t cancelled = book.cancel_if(
-        [victim](const RestingOrder& o) { return o.trader == victim; }, CancelReason::KillSwitch,
-        out);
+    const auto owned_by_victim = [victim](const RestingOrder& o) { return o.trader == victim; };
+    const std::size_t cancelled = book.cancel_if(owned_by_victim, CancelReason::KillSwitch, out);
 
     EXPECT_EQ(cancelled, 5U);
     // Bids best-to-worst (100 then 99), then asks best-to-worst (105 then 106),
@@ -187,9 +192,8 @@ TEST_F(OrderBookStorageTest, CancelIfMatchingNothingEmitsNothing) {
     book.rest(order(1, Side::Buy, 100, 1, 1), out);
     out.clear();
 
-    EXPECT_EQ(book.cancel_if([](const RestingOrder&) { return false; },
-                             CancelReason::TraderBlocked, out),
-              0U);
+    const auto match_none = [](const RestingOrder&) { return false; };
+    EXPECT_EQ(book.cancel_if(match_none, CancelReason::TraderBlocked, out), 0U);
     EXPECT_TRUE(out.empty());
     EXPECT_EQ(book.order_count(), 1U);
 }
@@ -197,13 +201,15 @@ TEST_F(OrderBookStorageTest, CancelIfMatchingNothingEmitsNothing) {
 TEST_F(OrderBookStorageTest, SlotsAreReusedAfterCancel) {
     constexpr std::uint64_t orders_per_round = 1'000;
     constexpr int rounds = 10;
+    constexpr std::int64_t lowest_price = 100;
+    constexpr std::uint64_t price_levels = 10;
     std::size_t capacity_after_first_round = 0;
     std::uint64_t next_id = 1;
 
     for (int round = 0; round < rounds; ++round) {
         const std::uint64_t first_id = next_id;
         for (std::uint64_t i = 0; i < orders_per_round; ++i) {
-            const auto price = static_cast<std::int64_t>(100 + (i % 10));
+            const std::int64_t price = lowest_price + static_cast<std::int64_t>(i % price_levels);
             book.rest(order(next_id, i % 2 == 0 ? Side::Buy : Side::Sell, price, 1), out);
             ++next_id;
         }
