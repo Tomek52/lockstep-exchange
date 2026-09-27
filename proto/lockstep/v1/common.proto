@@ -50,6 +50,7 @@ enum RejectReason {
   REJECT_REASON_NOT_ORDER_OWNER = 9;
   REJECT_REASON_DUPLICATE_CLIENT_ORDER_ID = 10;
   REJECT_REASON_RISK_UNAVAILABLE = 11;
+  REJECT_REASON_INVALID_TIME_IN_FORCE = 12;
   // Transport level: the shard's ingress queue is full (back-pressure).
   REJECT_REASON_OVERLOADED = 100;
   // Transport level: the exchange is shutting down.
