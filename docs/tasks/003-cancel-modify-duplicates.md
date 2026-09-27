@@ -1,0 +1,76 @@
+# 003: Modify (cancel/replace) and duplicate client order ids
+
+## Goal
+
+Implement `ModifyOrder` with standard priority rules, and reject new orders
+that reuse a client order id still live for the same trader.
+
+## Context
+
+- Rules: [domain-model.md](../architecture/domain-model.md) ("Matching rules").
+- `ShardEngine::on(const ModifyOrder&, ...)` in
+  `exchange-core/domain/src/shard_engine.cpp` validates, checks
+  existence/ownership, and returns `UnknownOrder` (`TODO(task-003)`).
+- Matching (`match()` from task 002) is reused for aggressive re-pricing.
+- Wire: `ModifyOrderRequest{trader_id, instrument_id, order_id,
+  new_price_ticks, new_quantity}` in `proto/lockstep/v1/order_entry.proto`.
+
+## Interfaces to implement
+
+Modify semantics (`new_quantity` is the new *total remaining* quantity):
+
+| Change | Behaviour | Events |
+|---|---|---|
+| same price, `new_quantity < remaining` | reduce in place, **keeps priority** | `OrderModified{kept_priority=true}`, `BookLevelChanged` |
+| same price, `new_quantity == remaining` | no-op, accepted | `OrderModified{kept_priority=true}` |
+| price change or `new_quantity > remaining` | cancel/replace: remove, then treat as an incoming order with the **same OrderId** at the new price (it may trade), rest any remainder at the tail | `OrderModified{kept_priority=false}`, `BookLevelChanged` (old level), then the matching events as in task 002 |
+
+Add to `OrderBook`:
+
+```cpp
+/// Sets the remaining quantity of a resting order in place (priority kept).
+/// Precondition: 0 < quantity < current remaining.
+void reduce(OrderId id, Quantity quantity, EventBuffer& out);
+/// Removes a resting order without emitting OrderCancelled (used by replace).
+[[nodiscard]] std::optional<RestingOrder> take(OrderId id, EventBuffer& out);
+```
+
+**Duplicate client order ids.** `NewOrder` is rejected with
+`DuplicateClientOrderId` if the same `(trader, client_order_id)` belongs to an
+order currently resting on any book in the shard. Once the order is filled or
+cancelled, the id may be reused. Document this choice in the
+`RejectReason::DuplicateClientOrderId` comment. Keep the lookup structure
+lookup-only (never iterated) to preserve determinism.
+
+## Acceptance criteria
+
+Tests in `exchange-core/tests/domain/modify_test.cpp`:
+
+1. Reduce at the same price keeps the order ahead of a later order at that
+   level (checked via `front()`).
+2. Increase quantity loses priority: the order moves behind the later order.
+3. Price change to a crossing price trades immediately, with the same
+   `OrderId` in `Trade::taker_order`.
+4. Modify by a non-owner → `NotOrderOwner`, book unchanged, no events.
+5. Modify of an unknown id → `UnknownOrder`; invalid new price or quantity →
+   `InvalidPrice` / `InvalidQuantity`.
+6. Duplicate client id while resting → `DuplicateClientOrderId`. After a
+   cancel, the same client id is accepted.
+7. The determinism test (`tests/determinism`) still passes.
+8. Presets debug, asan-ubsan and tsan pass; clang-tidy is clean.
+
+## Files expected to change
+
+- `exchange-core/domain/src/shard_engine.cpp` (`on(ModifyOrder)`, dup check in `on(NewOrder)`)
+- `exchange-core/domain/include/lockstep/domain/shard_engine.hpp` (private members)
+- `exchange-core/domain/include/lockstep/domain/order_book.hpp`, `src/order_book.cpp` (`reduce`, `take`)
+- `exchange-core/tests/domain/modify_test.cpp` (new), `tests/domain/CMakeLists.txt`
+
+## Out of scope
+
+- Wire changes (none are needed).
+- Order amendment of side or instrument (not supported: cancel and resubmit).
+
+## Dependencies
+
+- **Hard:** 002.

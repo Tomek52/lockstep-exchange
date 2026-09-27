@@ -52,7 +52,7 @@ struct BookSnapshot {
 /// clocks and randomness (ADR-0002, ADR-0004).
 ///
 /// SKELETON STATUS: the storage (FIFO per level) is the naive version and
-/// matching is not implemented. See docs/tasks/001-order-book-price-levels.md
+/// matching is not implemented. See docs/tasks/001-order-book-storage.md
 /// and docs/tasks/002-matching-limit-market.md.
 class OrderBook {
 public:
