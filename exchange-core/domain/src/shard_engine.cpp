@@ -6,7 +6,7 @@
 
 namespace lockstep::domain {
 
-ShardEngine::ShardEngine(ShardConfig config)
+ShardEngine::ShardEngine(const ShardConfig& config)
     : shard_{config.shard}, risk_{config.risk_link_policy} {
     for (const InstrumentSpec& spec : config.instruments) {
         books_.try_emplace(spec.id, spec);
@@ -14,7 +14,7 @@ ShardEngine::ShardEngine(ShardConfig config)
 }
 
 CommandResult ShardEngine::apply(const SequencedCommand& command, EventBuffer& out) {
-    return std::visit([&](const auto& cmd) { return on(cmd, out); }, command.command);
+    return std::visit([this, &out](const auto& cmd) { return on(cmd, out); }, command.command);
 }
 
 bool ShardEngine::owns(InstrumentId instrument) const noexcept {

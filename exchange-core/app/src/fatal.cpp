@@ -6,6 +6,8 @@
 namespace lockstep::app {
 
 namespace {
+// The process-wide hook is inherently global; it is written once at startup.
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::atomic<FatalHandler> g_handler{nullptr};
 }  // namespace
 

@@ -40,7 +40,7 @@ using CommandResult = std::expected<CommandOutcome, RejectReason>;
 /// iteration over hash containers may influence it.
 class ShardEngine {
 public:
-    explicit ShardEngine(ShardConfig config);
+    explicit ShardEngine(const ShardConfig& config);
 
     /// Applies one command, appending every resulting event to `out` (which the
     /// caller clears between commands).

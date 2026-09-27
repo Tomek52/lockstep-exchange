@@ -30,7 +30,7 @@ public:
         std::size_t max_batch{256};
     };
 
-    ShardRuntime(Config config, std::unique_ptr<Journal> journal, Clock& clock);
+    ShardRuntime(const Config& config, std::unique_ptr<Journal> journal, Clock& clock);
 
     [[nodiscard]] IngressQueue& ingress() noexcept { return ingress_; }
     [[nodiscard]] EgressQueue& egress() noexcept { return egress_; }
@@ -45,7 +45,7 @@ public:
 
 private:
     std::size_t poll_once();
-    void process(InboundCommand&& inbound);
+    void process(InboundCommand inbound);
     void release_staged();
 
     domain::ShardEngine engine_;

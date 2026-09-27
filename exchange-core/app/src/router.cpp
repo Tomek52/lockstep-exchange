@@ -36,7 +36,7 @@ std::span<const InstrumentSpec> Router::instruments_of(ShardId shard) const {
     return by_shard_.at(shard.value());
 }
 
-std::optional<InstrumentId> instrument_of(const domain::Command& command) noexcept {
+std::optional<InstrumentId> instrument_of(const domain::Command& command) {
     return std::visit(
         []<typename C>(const C& cmd) -> std::optional<InstrumentId> {
             if constexpr (requires { cmd.instrument; }) {

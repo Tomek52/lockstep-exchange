@@ -93,7 +93,7 @@ std::expected<void, SubmitError> Engine::submit(domain::Command command, Complet
         return std::unexpected(SubmitError::UnknownInstrument);
     }
     if (!shards_[shard->value()]->ingress().try_push(
-            InboundCommand{std::move(command), std::move(completion)})) {
+            InboundCommand{command, std::move(completion)})) {
         return std::unexpected(SubmitError::Overloaded);
     }
     return {};

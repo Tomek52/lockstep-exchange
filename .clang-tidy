@@ -15,12 +15,14 @@ Checks: >
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-avoid-do-while,
   -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
   misc-*,
   -misc-non-private-member-variables-in-classes,
   -misc-no-recursion,
   -misc-include-cleaner,
   modernize-*,
   -modernize-use-trailing-return-type,
+  -modernize-use-designated-initializers,
   -modernize-use-nodiscard,
   performance-*,
   portability-*,
@@ -38,6 +40,10 @@ Checks: >
 #  non-private-member-variables : value types (commands/events) are plain aggregates.
 #  include-cleaner : does not understand generated protobuf headers.
 #  use-trailing-return-type : style preference, not a correctness issue.
+#  use-designated-initializers : fields are strong types, so positional
+#      initialisation is already type-checked; used where it aids reading.
+#  avoid-const-or-ref-data-members : reference members are how ports are
+#      injected into non-copyable objects (non-null, never reseated).
 #  use-nodiscard : we add [[nodiscard]] deliberately on std::expected-returning APIs.
 #  identifier-length : `id`, `px`, `qt` are idiomatic in trading code.
 #  function-cognitive-complexity : matching loops are reviewed by humans instead.

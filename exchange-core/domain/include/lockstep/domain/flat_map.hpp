@@ -27,6 +27,9 @@
 namespace lockstep::domain {
 namespace detail {
 
+// Names follow the standard library (it stands in for std::flat_map).
+// NOLINTBEGIN(readability-identifier-naming)
+
 /// Sorted parallel vectors of keys and values - the same layout std::flat_map
 /// uses: key searches touch only the dense key array, which is what makes a
 /// flat map beat a node-based std::map for a handful of hot price levels.
@@ -191,6 +194,8 @@ private:
     std::vector<T> values_;
     [[no_unique_address]] Compare comp_{};
 };
+
+// NOLINTEND(readability-identifier-naming)
 
 }  // namespace detail
 

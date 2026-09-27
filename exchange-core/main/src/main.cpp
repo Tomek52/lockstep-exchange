@@ -32,9 +32,13 @@ namespace {
 using namespace lockstep;
 
 void print_fatal(std::string_view message) noexcept {
-    // Best effort: we are about to abort, so allocation failures here are moot.
-    std::println(stderr, "FATAL: {}\n{}", message, std::to_string(std::stacktrace::current(1)));
-    std::fflush(stderr);
+    try {
+        std::println(stderr, "FATAL: {}\n{}", message, std::to_string(std::stacktrace::current(1)));
+    } catch (...) {
+        // Formatting failed (e.g. out of memory); still say *something*.
+        (void)std::fputs("FATAL (stack trace unavailable)\n", stderr);
+    }
+    (void)std::fflush(stderr);
 }
 
 void install_fatal_handlers() {
@@ -120,7 +124,7 @@ int run(const main_app::Options& options) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv) try {
     install_fatal_handlers();
 
     const auto options = main_app::parse_options(std::span{argv, static_cast<std::size_t>(argc)});
@@ -132,11 +136,13 @@ int main(int argc, char** argv) {
         std::println("{}", main_app::usage);
         return EXIT_SUCCESS;
     }
-    try {
-        return run(*options);
-    } catch (const std::exception& e) {
-        // Startup errors (bad address, bad config) surface here (ADR-0008).
-        support::error("startup failed: {}", e.what());
-        return EXIT_FAILURE;
-    }
+    return run(*options);
+} catch (const std::exception& e) {
+    // Startup errors (bad address, bad config) surface here (ADR-0008).
+    (void)std::fputs("startup failed: ", stderr);
+    (void)std::fputs(e.what(), stderr);
+    (void)std::fputs("\n", stderr);
+    return EXIT_FAILURE;
+} catch (...) {
+    return EXIT_FAILURE;
 }

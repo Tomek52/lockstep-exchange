@@ -7,7 +7,8 @@
 
 namespace lockstep::domain {
 
-/// A distinct integer type. `Tag` makes every instantiation unique, so a Price
+/// A distinct integer type. `Tag` (an incomplete marker type such as
+/// `struct PriceTag`) makes every instantiation unique, so a Price
 /// never converts to, compares with, or adds to an OrderId by accident.
 ///
 /// Operations beyond comparison are opt-in via mixins (see Additive) that use

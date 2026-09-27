@@ -31,7 +31,6 @@ private:
 };
 
 /// The instrument an order command targets; nullopt for risk commands.
-[[nodiscard]] std::optional<domain::InstrumentId> instrument_of(
-    const domain::Command& command) noexcept;
+[[nodiscard]] std::optional<domain::InstrumentId> instrument_of(const domain::Command& command);
 
 }  // namespace lockstep::app

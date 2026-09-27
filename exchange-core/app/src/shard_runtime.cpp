@@ -7,8 +7,8 @@
 
 namespace lockstep::app {
 
-ShardRuntime::ShardRuntime(Config config, std::unique_ptr<Journal> journal, Clock& clock)
-    : engine_{std::move(config.shard)},
+ShardRuntime::ShardRuntime(const Config& config, std::unique_ptr<Journal> journal, Clock& clock)
+    : engine_{config.shard},
       journal_{std::move(journal)},
       clock_{clock},
       max_batch_{config.max_batch},
@@ -47,9 +47,9 @@ std::size_t ShardRuntime::poll_once() {
     return processed;
 }
 
-void ShardRuntime::process(InboundCommand&& inbound) {
+void ShardRuntime::process(InboundCommand inbound) {
     const domain::SequencedCommand command{domain::SequenceNumber{++sequence_}, clock_.now(),
-                                           std::move(inbound.command)};
+                                           inbound.command};
 
     // Write-ahead: the command is journaled before it can have any effect.
     if (const auto appended = journal_->append(command); !appended) {

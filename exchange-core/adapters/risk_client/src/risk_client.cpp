@@ -132,7 +132,7 @@ void RiskClient::on_command(const v1::RiskCommand& command) {
         return;
     }
     support::info("risk: command {} received ({})", command.command_id(), command.reason());
-    if (!ingress_.broadcast(std::move(*decoded))) {
+    if (!ingress_.broadcast(*decoded)) {
         support::warn("risk: command {} dropped (shutting down)", command.command_id());
     }
 }
