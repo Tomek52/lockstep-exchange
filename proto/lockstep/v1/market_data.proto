@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+// Public market data: trades and aggregated price levels.
+package lockstep.v1;
+
+import "lockstep/v1/common.proto";
+
+// Server-streaming market data. Events are ordered per shard and carry the
+// shard's sequence number so subscribers can detect gaps. Each subscriber has a
+// bounded buffer on the exchange; a subscriber that cannot keep up is
+// disconnected with RESOURCE_EXHAUSTED instead of slowing the publisher down
+// (ADR-0006).
+service MarketDataService {
+  // Stream events for the requested instruments until the client cancels.
+  rpc Subscribe(SubscribeRequest) returns (stream SubscribeResponse);
+}
+
+// Subscription filter.
+message SubscribeRequest {
+  ProtocolVersion protocol = 1;
+  // Empty means all instruments.
+  repeated uint32 instrument_ids = 2;
+  bool include_trades = 3;
+  bool include_book_updates = 4;
+}
+
+// One market data event.
+message SubscribeResponse {
+  uint32 shard_id = 1;
+  uint64 shard_sequence = 2;
+  int64 timestamp_ns = 3;
+  // Exactly one event per message.
+  oneof event {
+    Trade trade = 4;
+    BookLevelUpdate book_level_update = 5;
+    InstrumentStatus instrument_status = 6;
+  }
+}
+
+// A public trade. Trader identities are not disclosed on market data.
+message Trade {
+  uint32 instrument_id = 1;
+  sint64 price_ticks = 2;
+  uint64 quantity = 3;
+  // Side of the incoming (aggressing) order.
+  Side aggressor_side = 4;
+}
+
+// New aggregate quantity at one price level. quantity == 0 removes the level.
+message BookLevelUpdate {
+  uint32 instrument_id = 1;
+  Side side = 2;
+  sint64 price_ticks = 3;
+  uint64 quantity = 4;
+}
+
+// Trading state of an instrument (e.g. halted by the kill switch).
+message InstrumentStatus {
+  uint32 instrument_id = 1;
+  bool halted = 2;
+}

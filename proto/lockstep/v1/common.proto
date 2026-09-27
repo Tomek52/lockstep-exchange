@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+// Shared vocabulary for every lockstep service.
+//
+// Conventions (ADR-0005, ADR-0006):
+//  * Prices are fixed-point integers in instrument ticks (`sint64 *_ticks`). Never floats.
+//  * Quantities are integer lots (`uint64`).
+//  * Timestamps are nanoseconds since the Unix epoch, assigned by the exchange's
+//    sequencing point (a shard thread). Client clocks are never trusted.
+//  * The package suffix (`v1`) is the protocol MAJOR version. Breaking changes need
+//    a new package; `buf breaking` guards this in CI. The MINOR version is
+//    negotiated at runtime (see ProtocolVersion).
+package lockstep.v1;
+
+// Side of an order or of an execution from the owning trader's point of view.
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+// Order type. Market orders never rest: any unfilled remainder is cancelled.
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_LIMIT = 1;
+  ORDER_TYPE_MARKET = 2;
+}
+
+// Time in force for limit orders. Ignored (treated as IOC) for market orders.
+enum TimeInForce {
+  TIME_IN_FORCE_UNSPECIFIED = 0;
+  // Good till cancelled: the remainder rests on the book.
+  TIME_IN_FORCE_GTC = 1;
+  // Immediate or cancel: the remainder is cancelled after matching.
+  TIME_IN_FORCE_IOC = 2;
+}
+
+// Why a command was rejected. Mirrors lockstep::domain::RejectReason one-to-one,
+// plus transport-level reasons that never reach the domain.
+enum RejectReason {
+  REJECT_REASON_UNSPECIFIED = 0;
+  REJECT_REASON_UNKNOWN_INSTRUMENT = 1;
+  REJECT_REASON_INVALID_PRICE = 2;
+  REJECT_REASON_INVALID_QUANTITY = 3;
+  REJECT_REASON_INVALID_SIDE = 4;
+  REJECT_REASON_INVALID_ORDER_TYPE = 5;
+  REJECT_REASON_TRADER_BLOCKED = 6;
+  REJECT_REASON_TRADING_HALTED = 7;
+  REJECT_REASON_UNKNOWN_ORDER = 8;
+  REJECT_REASON_NOT_ORDER_OWNER = 9;
+  REJECT_REASON_DUPLICATE_CLIENT_ORDER_ID = 10;
+  REJECT_REASON_RISK_UNAVAILABLE = 11;
+  // Transport level: the shard's ingress queue is full (back-pressure).
+  REJECT_REASON_OVERLOADED = 100;
+  // Transport level: the exchange is shutting down.
+  REJECT_REASON_SHUTTING_DOWN = 101;
+}
+
+// Runtime-negotiated protocol version. `major` must equal the package version
+// (1 for lockstep.v1); `minor` advertises additive features. Streams exchange
+// it in their handshake; unary calls send the `x-lockstep-protocol: <major>.<minor>`
+// metadata header, and a major mismatch fails with FAILED_PRECONDITION.
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+}
+
+// Liveness probe on long-lived streams.
+message Heartbeat {
+  int64 sent_at_ns = 1;
+}

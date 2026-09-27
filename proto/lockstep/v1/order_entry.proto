@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+// Order entry: the command side of the exchange.
+package lockstep.v1;
+
+import "lockstep/v1/common.proto";
+
+// Unary order entry. Every call is one command; the response is sent after the
+// command has been journaled and applied by the owning shard, so an `accepted`
+// ack means "sequenced, durable (per journal policy) and on the book or matched".
+// Fills are reported on MarketDataService (public trades) and to the risk
+// sentinel (private execution reports), not in the ack. See ADR-0006 for why a
+// streaming FIX-like session was deferred.
+service OrderEntryService {
+  // Submit a new limit or market order.
+  rpc SubmitOrder(SubmitOrderRequest) returns (SubmitOrderResponse);
+  // Cancel a resting order. Only the owning trader may cancel.
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+  // Change price and/or quantity of a resting order. Reducing quantity at the
+  // same price keeps time priority; any other change loses it.
+  rpc ModifyOrder(ModifyOrderRequest) returns (ModifyOrderResponse);
+}
+
+// A new order.
+message SubmitOrderRequest {
+  uint64 trader_id = 1;
+  // Client-assigned, unique per trader; used for duplicate detection.
+  uint64 client_order_id = 2;
+  uint32 instrument_id = 3;
+  Side side = 4;
+  OrderType type = 5;
+  TimeInForce time_in_force = 6;
+  // Limit price in ticks. Must be > 0 for limit orders and 0 for market orders.
+  sint64 price_ticks = 7;
+  uint64 quantity = 8;
+}
+
+// Result of SubmitOrder.
+message SubmitOrderResponse {
+  CommandAck ack = 1;
+}
+
+// Cancel a resting order.
+message CancelOrderRequest {
+  uint64 trader_id = 1;
+  uint32 instrument_id = 2;
+  uint64 order_id = 3;
+}
+
+// Result of CancelOrder.
+message CancelOrderResponse {
+  CommandAck ack = 1;
+}
+
+// Cancel/replace of a resting order.
+message ModifyOrderRequest {
+  uint64 trader_id = 1;
+  uint32 instrument_id = 2;
+  uint64 order_id = 3;
+  sint64 new_price_ticks = 4;
+  uint64 new_quantity = 5;
+}
+
+// Result of ModifyOrder.
+message ModifyOrderResponse {
+  CommandAck ack = 1;
+}
+
+// Outcome of one command, stamped with the shard's sequence number and time.
+// (shard_id, shard_sequence) identifies the command's position in that shard's
+// journal: replaying the journal reproduces this exact ack.
+message CommandAck {
+  uint32 shard_id = 1;
+  uint64 shard_sequence = 2;
+  int64 timestamp_ns = 3;
+  // Exactly one outcome per command.
+  oneof result {
+    Accepted accepted = 4;
+    Rejected rejected = 5;
+  }
+}
+
+// Positive outcome of a command.
+message Accepted {
+  // Exchange-assigned order id (the new id for SubmitOrder, the affected order otherwise).
+  uint64 order_id = 1;
+}
+
+// Negative outcome of a command.
+message Rejected {
+  RejectReason reason = 1;
+  // Human-readable detail; never parsed by clients.
+  string detail = 2;
+}

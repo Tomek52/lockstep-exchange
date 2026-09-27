@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+// Post-trade risk loop between exchange-core (client) and risk-sentinel (server).
+package lockstep.v1;
+
+import "lockstep/v1/common.proto";
+
+// One long-lived bidirectional stream per exchange instance (ADR-0013).
+//
+// Upstream (exchange -> sentinel): hello first, then execution reports,
+// acknowledgements of applied risk commands, heartbeats.
+// Downstream (sentinel -> exchange): accept first, then risk commands, heartbeats.
+//
+// Risk commands are idempotent by `command_id`. The exchange injects each one
+// into every shard's input queue, where it is journaled like any order, so a
+// journal replay reproduces blocks and kill switches exactly (ADR-0004).
+service RiskSentinelService {
+  // The risk session.
+  rpc Monitor(stream MonitorRequest) returns (stream MonitorResponse);
+}
+
+// Exchange -> sentinel.
+message MonitorRequest {
+  // Upstream payload; the first message of a session must be hello.
+  oneof message {
+    SessionHello hello = 1;
+    ExecutionReport execution = 2;
+    CommandApplied command_applied = 3;
+    Heartbeat heartbeat = 4;
+  }
+}
+
+// Sentinel -> exchange.
+message MonitorResponse {
+  // Downstream payload; the first message of a session must be accept.
+  oneof message {
+    SessionAccept accept = 1;
+    RiskCommand command = 2;
+    Heartbeat heartbeat = 3;
+  }
+}
+
+// First upstream message of a session.
+message SessionHello {
+  ProtocolVersion protocol = 1;
+  // Stable identity of the exchange instance.
+  string exchange_id = 2;
+  uint32 shard_count = 3;
+}
+
+// First downstream message of a session.
+message SessionAccept {
+  ProtocolVersion protocol = 1;
+  string sentinel_id = 2;
+}
+
+// One side of a fill, as seen by the trader who owns the order. Every trade
+// produces two reports (maker and taker).
+message ExecutionReport {
+  uint32 shard_id = 1;
+  uint64 shard_sequence = 2;
+  int64 timestamp_ns = 3;
+  uint64 trader_id = 4;
+  uint32 instrument_id = 5;
+  uint64 order_id = 6;
+  Side side = 7;
+  sint64 price_ticks = 8;
+  uint64 quantity = 9;
+  // True if this order was resting on the book (provided liquidity).
+  bool is_maker = 10;
+}
+
+// A command from the sentinel.
+message RiskCommand {
+  // Idempotency key, unique per sentinel instance.
+  uint64 command_id = 1;
+  // Free text for operators; not journaled, never interpreted.
+  string reason = 2;
+  // What the exchange must do.
+  oneof action {
+    BlockTrader block_trader = 3;
+    UnblockTrader unblock_trader = 4;
+    KillSwitch kill_switch = 5;
+  }
+}
+
+// Reject all new orders from a trader and cancel their resting orders.
+message BlockTrader {
+  uint64 trader_id = 1;
+}
+
+// Allow a previously blocked trader to trade again.
+message UnblockTrader {
+  uint64 trader_id = 1;
+}
+
+// Halt (engaged = true) or resume (engaged = false) all trading.
+message KillSwitch {
+  bool engaged = 1;
+}
+
+// Sent once every shard has applied a RiskCommand.
+message CommandApplied {
+  uint64 command_id = 1;
+}

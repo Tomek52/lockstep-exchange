@@ -1,0 +1,16 @@
+version: v2
+modules:
+  - path: .
+    name: buf.build/lockstep/exchange
+lint:
+  use:
+    - STANDARD
+    - COMMENTS
+  except:
+    # Field-level comments are required only where the meaning is non-obvious;
+    # enforcing them everywhere produces noise like "// The trader id."
+    - COMMENT_FIELD
+    - COMMENT_ENUM_VALUE
+breaking:
+  use:
+    - WIRE_JSON
