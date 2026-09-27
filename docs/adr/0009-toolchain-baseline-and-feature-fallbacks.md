@@ -59,8 +59,10 @@ while building the skeleton produced these results:
      fallback).
    - `std::move_only_function`: completions carrying move-only gRPC state.
    - `std::print`: logging and the fatal handler (never on the hot path).
-   - `ranges::to`, `views::enumerate/zip/chunk_by`: router assignment,
-     snapshots, determinism diffing.
+   - `ranges::to`, `views::enumerate/zip`: router assignment, snapshots,
+     determinism diffing. `views::chunk_by` is part of the probed baseline
+     but not used yet. A natural use is grouping events per command in the
+     replay digest (task 010).
    - `std::stacktrace`: fatal and terminate handlers.
    - `std::unreachable`: after exhaustive switches.
    - `if consteval`: journal byte I/O. Shifts during constant evaluation (so
