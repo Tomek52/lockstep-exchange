@@ -1,0 +1,23 @@
+# C++ build trees (one per CMake preset)
+/build/
+/out/
+compile_commands.json
+.cache/
+
+# Rust
+/rust/target/
+
+# Runtime artefacts
+*.jnl
+/data/
+/tmp/
+crash-*
+leak-*
+timeout-*
+/exchange-core/fuzz/corpus/*/generated-*
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

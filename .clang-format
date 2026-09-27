@@ -1,0 +1,38 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+Standard: Latest
+ColumnLimit: 100
+IndentWidth: 4
+AccessModifierOffset: -4
+PointerAlignment: Left
+ReferenceAlignment: Left
+QualifierAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeConceptDeclarations: Always
+RequiresClausePosition: OwnLine
+BinPackParameters: false
+BinPackArguments: true
+DerivePointerAlignment: false
+FixNamespaceComments: true
+NamespaceIndentation: None
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Own headers
+  - Regex: '^"lockstep/'
+    Priority: 3
+  - Regex: '^<lockstep/'
+    Priority: 3
+  # Generated protobuf / third-party
+  - Regex: '^<(grpcpp|grpc|google|gtest|gmock|benchmark)/'
+    Priority: 2
+  # Standard library
+  - Regex: '^<[a-z_]+>$'
+    Priority: 1
+  - Regex: '.*'
+    Priority: 4

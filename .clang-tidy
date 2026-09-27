@@ -1,0 +1,72 @@
+---
+# Philosophy: enable whole families that catch real bugs or enforce modern idioms, then
+# disable individual checks with a stated reason. Every suppression below must say why.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  cert-err33-c,
+  cert-err34-c,
+  cert-err58-cpp,
+  concurrency-*,
+  cppcoreguidelines-*,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-avoid-do-while,
+  -cppcoreguidelines-owning-memory,
+  misc-*,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-include-cleaner,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-use-nodiscard,
+  performance-*,
+  portability-*,
+  readability-*,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity,
+  -readability-uppercase-literal-suffix
+# Why the suppressions:
+#  easily-swappable-parameters : domain uses strong types; remaining hits are false positives.
+#  avoid-magic-numbers / magic-numbers : tests and wire constants would drown in noise.
+#  pro-bounds-constant-array-index : ring buffers index with masked runtime values by design.
+#  pro-type-reinterpret-cast : the journal codec reads bytes; confined to adapters/journal.
+#  owning-memory : we do not use gsl::owner.
+#  non-private-member-variables : value types (commands/events) are plain aggregates.
+#  include-cleaner : does not understand generated protobuf headers.
+#  use-trailing-return-type : style preference, not a correctness issue.
+#  use-nodiscard : we add [[nodiscard]] deliberately on std::expected-returning APIs.
+#  identifier-length : `id`, `px`, `qt` are idiomatic in trading code.
+#  function-cognitive-complexity : matching loops are reviewed by humans instead.
+
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/exchange-core/.*\.hpp$'
+FormatStyle: file
+CheckOptions:
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumConstantCase
+    value: CamelCase
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.PrivateMemberSuffix
+    value: _
+  - key: readability-identifier-naming.ConceptCase
+    value: CamelCase
+  - key: readability-identifier-naming.TemplateParameterCase
+    value: CamelCase
+  - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true
+  - key: misc-const-correctness.AnalyzeValues
+    value: false

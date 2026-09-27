@@ -1,0 +1,8 @@
+# Normalise everything to LF in the repository and in working trees, so that
+# shell scripts and generated code survive checkouts on Windows hosts.
+* text=auto eol=lf
+
+*.sh      text eol=lf
+*.bat     text eol=crlf
+*.png     binary
+*.jnl     binary
