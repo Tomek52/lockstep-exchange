@@ -1,0 +1,4 @@
+# Fixed-point money uses i128 on purpose (ADR-0005); keep arithmetic lints strict.
+msrv = "1.98"
+# Domain vocabulary that is not code: allow it unquoted in docs.
+doc-valid-idents = ["PnL", ".."]

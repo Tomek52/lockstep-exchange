@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/lockstep-proto",
+    "crates/risk-sentinel",
+    "crates/lockstep-loadgen",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+
+[workspace.dependencies]
+lockstep-proto = { path = "crates/lockstep-proto" }
+risk-sentinel = { path = "crates/risk-sentinel" }
+
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+hdrhistogram = { version = "7.6.0", default-features = false }
+proptest = "1.11.0"
+prost = "0.14.4"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "sync", "net", "time"] }
+tokio-stream = { version = "0.1.19", features = ["net"] }
+tonic = "0.14.6"
+tonic-prost = "0.14.6"
+tonic-prost-build = "0.14.6"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# CI runs `cargo clippy --all-targets -- -D warnings`, so every warning here is a
+# build failure. Pedantic is on; the allowances below are deliberate.
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow" # `positions::Position` reads fine
+missing_errors_doc = "allow"      # errors are self-describing tonic Statuses / anyhow
