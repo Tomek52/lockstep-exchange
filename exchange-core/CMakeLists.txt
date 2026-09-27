@@ -11,6 +11,7 @@
 
 add_subdirectory(domain)
 add_subdirectory(concurrency)
+add_subdirectory(app)
 
 if(LOCKSTEP_BUILD_TESTS)
   add_subdirectory(tests)

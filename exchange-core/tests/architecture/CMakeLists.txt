@@ -21,3 +21,6 @@ set_tests_properties(architecture.fixture_impure_domain_includes PROPERTIES WILL
 
 lockstep_add_include_rule(concurrency ${_core}/concurrency
   ALLOWED_PROJECT "lockstep/concurrency/")
+
+lockstep_add_include_rule(app ${_core}/app
+  ALLOWED_PROJECT "lockstep/domain/" "lockstep/concurrency/" "lockstep/app/")
