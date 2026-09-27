@@ -131,12 +131,18 @@ The skeleton was produced by an LLM agent (Claude) in two phases. First, a
 written plan: the directory tree, target graph, proto sketch, threading
 design, ADR list and backlog. A human reviewed and approved it. Then the
 build-out, with verification after every step:
-- each C++ commit was checked out into a clean worktree, built and tested;
-- the debug, clang-debug, asan-ubsan and tsan presets were run;
-- clang-tidy, clippy, the e2e smoke test and the Docker Compose stack were
-  run locally.
+- every commit that touches C++ or CMake was checked out into a clean git
+  worktree, built with the `debug` preset and had its tests run;
+- the final tree passed all five presets (debug, release, clang-debug,
+  asan-ubsan, tsan), clang-tidy, clippy, `buf breaking` (including a
+  deliberate negative test), the e2e smoke test, and the Docker Compose stack;
+- the setup script was timed in a fresh `ubuntu:24.04` container.
 
-The commit history shows the order in which things were built.
+The GitHub Actions workflow was linted with actionlint but has not run on
+GitHub yet. The commit history shows the order in which things were built.
+An independent review pass before finishing found several statements in the
+docs that went beyond the evidence; they were corrected, which is the
+workflow above working as intended.
 
 ## Lessons learned
 

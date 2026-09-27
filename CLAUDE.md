@@ -132,8 +132,9 @@ explicitly; don't claim a check you did not run.
 
 - [ ] The task spec's acceptance criteria pass, with tests written first
       (see ai-workflow.md).
-- [ ] `cmake --build` + `ctest` pass on the **debug**, **asan-ubsan** and
-      **tsan** presets (clang-debug and release in CI).
+- [ ] `cmake --build` + `ctest` pass on **all presets**: debug, release,
+      clang-debug, asan-ubsan and tsan. TSan is never optional; the runtime
+      is multi-threaded by design.
 - [ ] `scripts/run-clang-tidy.sh` and `scripts/check-format.sh` are clean.
 - [ ] If Rust changed: fmt, clippy (`-D warnings`) and tests pass.
 - [ ] If `proto/` changed: `scripts/check-proto.sh` passes, and both builds

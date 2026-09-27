@@ -80,7 +80,11 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       - name: Install pinned toolchain (rust-toolchain.toml)
-        run: rustup show
+        # Same as scripts/setup-ubuntu.sh: newer rustup no longer installs the
+        # toolchain from `rustup show` alone.
+        run: |
+          rustup show active-toolchain >/dev/null 2>&1 || rustup toolchain install
+          rustup show
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
