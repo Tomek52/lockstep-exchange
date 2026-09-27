@@ -11,6 +11,7 @@
 
 add_subdirectory(domain)
 add_subdirectory(concurrency)
+add_subdirectory(support)
 add_subdirectory(app)
 add_subdirectory(adapters)
 

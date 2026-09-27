@@ -3,3 +3,4 @@
 add_subdirectory(journal)
 add_subdirectory(codec)
 add_subdirectory(grpc)
+add_subdirectory(risk_client)
