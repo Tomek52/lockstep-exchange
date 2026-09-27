@@ -82,7 +82,32 @@ C++ (formatting by `.clang-format`, naming enforced by `.clang-tidy`):
 - Bind `flat_map` elements with `auto&&`/`const auto&`, never `auto&`
   (`std::flat_map` iterators return proxies).
 - Comments explain *why*, not what. Cite ADRs (`// relaxed: see ADR-0011`).
+  Full rules: "Comments and in-code documentation" below.
 - `constexpr` + `static_assert` for logic that can be checked at compile time.
+
+Comments and in-code documentation (C++ and Rust):
+1. **Readable code first.** Descriptive names, small functions, named
+   constants instead of magic numbers. Express values with units (prices,
+   quantities, timestamps, durations) as strong types, never a bare integer
+   or `double`. Express possible failures in the signature
+   (`std::expected`, `Result`), not in a comment.
+2. **Comments only for *why*.** Non-obvious requirements (exchange rules,
+   determinism), workarounds, warnings (call order, required thread,
+   pointer lifetime), references to ADRs and tasks. Never a comment that
+   restates the code. When you work out a non-obvious reason behind existing
+   behaviour, add a comment and flag it in the change summary for
+   verification.
+3. **Doxygen (`///`) only for public interfaces** of the domain, the app
+   layer and its ports. Describe the contract: preconditions, units, edge
+   cases, errors, threading, lifetime of returned pointers. Not for private
+   functions, trivial getters, test code or adapters' internals.
+4. **No commented-out code, and no `TODO` without a task reference**
+   (`// TODO(task-NNN): ...`) in new or changed code. Do not remove
+   existing ones as part of an unrelated change; propose that separately.
+5. **Comments must stay true.** When code changes, update or delete comments
+   it made false. When moving code, move its *why* comments with it. Do not
+   delete an existing comment just because you do not understand it; list
+   doubtful ones in the change summary.
 
 Rust (`rust/`): `cargo fmt`; clippy pedantic with `-D warnings` (workspace
 lints). No `unsafe` (forbidden). No `unwrap()` outside tests and startup.
