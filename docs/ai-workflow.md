@@ -138,8 +138,8 @@ build-out, with verification after every step:
   deliberate negative test), the e2e smoke test, and the Docker Compose stack;
 - the setup script was timed in a fresh `ubuntu:24.04` container.
 
-The GitHub Actions workflow was linted with actionlint but has not run on
-GitHub yet. The commit history shows the order in which things were built.
+The GitHub Actions workflow, linted locally with actionlint, then passed all
+11 jobs on its first run on GitHub. The commit history shows the order in which things were built.
 An independent review pass before finishing found several statements in the
 docs that went beyond the evidence; they were corrected, which is the
 workflow above working as intended.

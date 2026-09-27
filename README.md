@@ -133,7 +133,7 @@ ROADMAP.md                milestones → task specs
 | Area | Status |
 |---|---|
 | Build: CMake presets (debug, release, clang-debug, asan-ubsan, tsan), feature probe, architecture rules | ✅ |
-| CI: C++ on 5 presets, clang-tidy, fuzzing, Rust, proto checks, e2e, Docker | ✅ written and actionlint-validated; see the note below |
+| CI: C++ on 5 presets, clang-tidy, fuzzing, Rust, proto checks, e2e, Docker | ✅ all 11 jobs green on GitHub Actions |
 | Contracts: `lockstep.v1` protos, codegen in CMake and `build.rs` | ✅ |
 | Domain: strong types, validation, naive order book, shard engine acknowledging orders | ✅ (matching: [M1](ROADMAP.md)) |
 | Runtime: shards + publisher on `std::jthread`, write-ahead ordering, lossless shutdown | ✅ on placeholder mutex queues (lock-free: [M2](ROADMAP.md)) |
@@ -151,7 +151,7 @@ Verified locally on the skeleton (WSL2, Ubuntu 24.04):
 - the e2e smoke test;
 - the compose stack (200/200 orders accepted).
 
-The GitHub Actions workflow has been linted but not yet executed on GitHub.
+GitHub Actions: all 11 jobs passed on the first run after publishing (run 36348820151).
 
 ## Benchmark results
 
