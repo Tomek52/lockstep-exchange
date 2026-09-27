@@ -1,0 +1,143 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CMAKE_CXX_COMPILER_LAUNCHER: ccache
+
+jobs:
+  cpp:
+    name: C++ ${{ matrix.preset }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # tsan is mandatory: the runtime is multi-threaded by design (ADR-0003).
+        preset: [debug, clang-debug, release, asan-ubsan, tsan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: scripts/setup-ubuntu.sh --ci --no-rust
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.preset }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.preset }}-
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  lint:
+    name: Format + clang-tidy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: scripts/setup-ubuntu.sh --ci
+      - name: Format (clang-format, rustfmt, buf)
+        run: scripts/check-format.sh
+      - name: clang-tidy
+        run: scripts/run-clang-tidy.sh
+
+  fuzz:
+    name: Fuzz (60 s)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: scripts/setup-ubuntu.sh --ci --no-rust
+      - name: Build fuzzers (ASan + UBSan)
+        run: |
+          cmake --preset asan-ubsan
+          cmake --build --preset asan-ubsan --target order_entry_decode_fuzzer
+      - name: Fuzz order entry decoding
+        run: |
+          mkdir -p corpus
+          build/asan-ubsan/exchange-core/fuzz/order_entry_decode_fuzzer corpus -max_total_time=60 -print_final_stats=1
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: test
+        run: cargo test --locked
+
+  proto:
+    name: Proto consistency
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install buf
+        run: |
+          BUF_VERSION=1.47.2
+          sudo curl -fsSL -o /usr/local/bin/buf \
+            "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-Linux-x86_64"
+          sudo chmod +x /usr/local/bin/buf
+      - name: Lint, format and breaking-change check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            scripts/check-proto.sh --against "origin/${{ github.base_ref }}"
+          else
+            scripts/check-proto.sh --against "HEAD~1"
+          fi
+      # Both code generators must accept the contracts; the cpp and rust jobs
+      # compile them, this job fails fast on schema problems.
+
+  e2e:
+    name: End-to-end smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: scripts/setup-ubuntu.sh --ci
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build exchange-core
+        run: |
+          cmake --preset debug -DLOCKSTEP_BUILD_TESTS=OFF -DLOCKSTEP_BUILD_BENCHMARKS=OFF
+          cmake --build --preset debug --target exchange-core
+      - name: Build risk-sentinel and loadgen
+        run: cd rust && cargo build --locked
+      - name: Smoke test
+        run: scripts/e2e-smoke.sh
+
+  docker:
+    name: Docker images
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build compose images
+        run: docker compose -f deploy/docker-compose.yml build
