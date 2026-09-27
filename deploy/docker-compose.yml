@@ -1,0 +1,49 @@
+# Runs the whole system locally:
+#   docker compose -f deploy/docker-compose.yml up --build
+#   docker compose -f deploy/docker-compose.yml --profile load run --rm loadgen
+name: lockstep
+
+services:
+  risk-sentinel:
+    build:
+      context: ..
+      dockerfile: deploy/rust.Dockerfile
+    image: lockstep/rust:dev
+    command: ["risk-sentinel", "--listen", "0.0.0.0:50052"]
+    ports:
+      - "50052:50052"
+    healthcheck:
+      # No gRPC health service yet; a TCP connect is enough to order start-up.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/50052"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+
+  exchange-core:
+    build:
+      context: ..
+      dockerfile: deploy/exchange-core.Dockerfile
+    image: lockstep/exchange-core:dev
+    command:
+      - --listen=0.0.0.0:50051
+      - --risk-sentinel=risk-sentinel:50052
+      - --shards=2
+      - --instruments=1,2,3,4
+    ports:
+      - "50051:50051"
+    depends_on:
+      risk-sentinel:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/50051"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+
+  loadgen:
+    image: lockstep/rust:dev
+    profiles: ["load"]
+    command: ["loadgen", "--target", "http://exchange-core:50051", "--count", "1000", "--instrument", "2"]
+    depends_on:
+      exchange-core:
+        condition: service_healthy
