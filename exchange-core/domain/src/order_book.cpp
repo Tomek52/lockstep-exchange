@@ -1,6 +1,6 @@
 #include "lockstep/domain/order_book.hpp"
 
-#include <algorithm>
+#include <cassert>
 #include <ranges>
 
 namespace lockstep::domain {
@@ -11,7 +11,7 @@ template <typename Levels>
 std::vector<LevelView> aggregate(const Levels& levels) {
     return levels | std::views::transform([](const auto& entry) {
                const auto& [price, level] = entry;
-               return LevelView{price, level.total, level.orders.size()};
+               return LevelView{price, level.total, level.count};
            }) |
            std::ranges::to<std::vector>();
 }
@@ -37,15 +37,7 @@ Quantity OrderBook::quantity_at(Side side, Price price) const noexcept {
 }
 
 std::size_t OrderBook::order_count() const noexcept {
-    std::size_t count = 0;
-    for (const auto side : {Side::Buy, Side::Sell}) {
-        with_side(side, [&count](const auto& levels) {
-            for (const auto& [price, level] : levels) {
-                count += level.orders.size();
-            }
-        });
-    }
-    return count;
+    return index_.size();
 }
 
 BookSnapshot OrderBook::snapshot() const {
@@ -53,32 +45,56 @@ BookSnapshot OrderBook::snapshot() const {
 }
 
 const RestingOrder* OrderBook::find(OrderId id) const noexcept {
-    // O(orders): acceptable for the skeleton; task 001 adds an id index.
-    for (const auto side : {Side::Buy, Side::Sell}) {
-        const RestingOrder* found =
-            with_side(side, [id](const auto& levels) -> const RestingOrder* {
-                for (const auto& [price, level] : levels) {
-                    const auto it = std::ranges::find(level.orders, id, &RestingOrder::id);
-                    if (it != level.orders.end()) {
-                        return &*it;
-                    }
-                }
-                return nullptr;
-            });
-        if (found != nullptr) {
-            return found;
+    const auto it = index_.find(id);
+    return it == index_.end() ? nullptr : &pool_.node(it->second).order;
+}
+
+const RestingOrder* OrderBook::front(Side side) const noexcept {
+    return with_side(side, [this](const auto& levels) -> const RestingOrder* {
+        if (levels.empty()) {
+            return nullptr;
         }
-    }
-    return nullptr;
+        return &pool_.node(levels.begin()->second.head).order;
+    });
 }
 
 void OrderBook::rest(const RestingOrder& order, EventBuffer& out) {
+    const Index slot = pool_.acquire(order);
+    [[maybe_unused]] const auto [pos, inserted] = index_.try_emplace(order.id, slot);
+    assert(inserted && "order id is already resting");
+
     with_side(order.side, [&](auto& levels) {
-        auto [it, inserted] = levels.try_emplace(order.price);
-        Level& level = it->second;
-        level.orders.push_back(order);
+        auto&& [price, level] = *levels.try_emplace(order.price).first;
+        pool_.node(slot).prev = level.tail;
+        if (level.tail == OrderPool::npos) {
+            level.head = slot;
+        } else {
+            pool_.node(level.tail).next = slot;
+        }
+        level.tail = slot;
+        ++level.count;
         level.total += order.remaining;
-        out.push(BookLevelChanged{spec_.id, order.side, order.price, level.total});
+        out.push(BookLevelChanged{spec_.id, order.side, price, level.total});
+    });
+}
+
+void OrderBook::reduce_front(Side side, Quantity quantity, EventBuffer& out) {
+    with_side(side, [&](auto& levels) {
+        assert(!levels.empty() && "reduce_front on an empty side");
+        const auto it = levels.begin();
+        auto&& [price, level] = *it;
+        RestingOrder& order = pool_.node(level.head).order;
+        assert(Quantity{0} < quantity && quantity <= order.remaining);
+
+        order.remaining -= quantity;
+        level.total -= quantity;
+        if (order.remaining == Quantity{0}) {
+            remove(level, level.head);
+        }
+        out.push(BookLevelChanged{spec_.id, side, price, level.total});
+        if (level.count == 0) {
+            levels.erase(it);
+        }
     });
 }
 
@@ -86,28 +102,46 @@ std::expected<Quantity, RejectReason> OrderBook::cancel(OrderId id,
                                                         TraderId requester,
                                                         CancelReason reason,
                                                         EventBuffer& out) {
-    const RestingOrder* found = find(id);
-    if (found == nullptr) {
+    const auto found = index_.find(id);
+    if (found == index_.end()) {
         return std::unexpected(RejectReason::UnknownOrder);
     }
-    if (found->trader != requester) {
+    const Index slot = found->second;
+    const RestingOrder order = pool_.node(slot).order;  // copy: remove() frees the slot
+    if (order.trader != requester) {
         return std::unexpected(RejectReason::NotOrderOwner);
     }
-    const RestingOrder order = *found;  // copy: the erase below invalidates `found`
 
     with_side(order.side, [&](auto& levels) {
-        auto level_it = levels.find(order.price);
+        const auto level_it = levels.find(order.price);
         Level& level = level_it->second;
-        std::erase_if(level.orders, [id](const RestingOrder& o) { return o.id == id; });
-        level.total -= order.remaining;
+        remove(level, slot);
         const Quantity remaining_at_level = level.total;
-        if (level.orders.empty()) {
+        if (level.count == 0) {
             levels.erase(level_it);
         }
         out.push(OrderCancelled{order.id, order.trader, spec_.id, order.remaining, reason});
         out.push(BookLevelChanged{spec_.id, order.side, order.price, remaining_at_level});
     });
     return order.remaining;
+}
+
+void OrderBook::remove(Level& level, Index index) noexcept {
+    const OrderPool::Node& node = pool_.node(index);
+    if (node.prev == OrderPool::npos) {
+        level.head = node.next;
+    } else {
+        pool_.node(node.prev).next = node.next;
+    }
+    if (node.next == OrderPool::npos) {
+        level.tail = node.prev;
+    } else {
+        pool_.node(node.next).prev = node.prev;
+    }
+    --level.count;
+    level.total -= node.order.remaining;
+    index_.erase(node.order.id);
+    pool_.release(index);
 }
 
 }  // namespace lockstep::domain
