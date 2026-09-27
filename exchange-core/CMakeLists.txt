@@ -19,3 +19,7 @@ add_subdirectory(main)
 if(LOCKSTEP_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+
+if(LOCKSTEP_BUILD_BENCHMARKS)
+  add_subdirectory(bench)
+endif()
