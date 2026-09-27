@@ -23,3 +23,7 @@ endif()
 if(LOCKSTEP_BUILD_BENCHMARKS)
   add_subdirectory(bench)
 endif()
+
+if(LOCKSTEP_BUILD_FUZZERS)
+  add_subdirectory(fuzz)
+endif()
