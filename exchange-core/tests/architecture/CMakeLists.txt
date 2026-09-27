@@ -24,3 +24,6 @@ lockstep_add_include_rule(concurrency ${_core}/concurrency
 
 lockstep_add_include_rule(app ${_core}/app
   ALLOWED_PROJECT "lockstep/domain/" "lockstep/concurrency/" "lockstep/app/")
+
+lockstep_add_include_rule(journal ${_core}/adapters/journal
+  ALLOWED_PROJECT "lockstep/domain/" "lockstep/concurrency/" "lockstep/app/" "lockstep/journal/")
