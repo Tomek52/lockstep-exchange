@@ -14,9 +14,9 @@ SequencedCommand sequenced(Command command, std::uint64_t seq = 1) {
                             std::move(command)};
 }
 
-NewOrder buy(std::int64_t price, std::uint64_t qty) {
+NewOrder buy(std::int64_t price, std::uint64_t qty, std::uint64_t client_order_id = 7) {
     return NewOrder{.trader = TraderId{42},
-                    .client_order_id = ClientOrderId{7},
+                    .client_order_id = ClientOrderId{client_order_id},
                     .instrument = instrument,
                     .side = Side::Buy,
                     .type = OrderType::Limit,
@@ -46,8 +46,11 @@ TEST_F(ShardEngineTest, AcceptsValidOrderWithShardScopedId) {
 }
 
 TEST_F(ShardEngineTest, OrderIdsAreMonotonicWithinAShard) {
-    const auto first = engine.apply(sequenced(buy(100, 1), 1), out);
-    const auto second = engine.apply(sequenced(buy(100, 1), 2), out);
+    // Distinct client order ids: same-trader reuse of one while it is still
+    // resting is a DuplicateClientOrderId reject (task 003), and this test is
+    // about order id monotonicity, not that rule.
+    const auto first = engine.apply(sequenced(buy(100, 1, 7), 1), out);
+    const auto second = engine.apply(sequenced(buy(100, 1, 8), 2), out);
     ASSERT_TRUE(first && second);
     EXPECT_LT(first->order_id, second->order_id);
 }

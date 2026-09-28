@@ -82,6 +82,20 @@ public:
     /// Emits exactly one BookLevelChanged for the affected level.
     void reduce_front(Side side, Quantity quantity, EventBuffer& out);
 
+    /// Sets the remaining quantity of a resting order in place, keeping its
+    /// price-time priority (used by ModifyOrder when the price is unchanged
+    /// and the new quantity is smaller: task 003). Precondition: `id` is
+    /// resting and 0 < quantity < its current remaining. Emits one
+    /// BookLevelChanged for the order's level.
+    void reduce(OrderId id, Quantity quantity, EventBuffer& out);
+
+    /// Removes a resting order without emitting OrderCancelled, for
+    /// ModifyOrder's cancel/replace path (task 003): the caller emits
+    /// OrderModified instead, then re-enters the order as new. Emits one
+    /// BookLevelChanged for the order's level. Returns nullopt, and leaves the
+    /// book unchanged, if `id` is not resting.
+    [[nodiscard]] std::optional<RestingOrder> take(OrderId id, EventBuffer& out);
+
     /// Cancels every resting order for which `predicate` returns true, in
     /// deterministic order: bids best-to-worst then asks best-to-worst, FIFO
     /// within a level. Emits OrderCancelled for each order and one

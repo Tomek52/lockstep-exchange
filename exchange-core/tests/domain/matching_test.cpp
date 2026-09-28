@@ -23,9 +23,10 @@ NewOrder limit_order(Side side,
                      std::int64_t price,
                      std::uint64_t qty,
                      TraderId trader = TraderId{1},
-                     TimeInForce tif = TimeInForce::Gtc) {
+                     TimeInForce tif = TimeInForce::Gtc,
+                     ClientOrderId client_order_id = ClientOrderId{1}) {
     return NewOrder{.trader = trader,
-                    .client_order_id = ClientOrderId{1},
+                    .client_order_id = client_order_id,
                     .instrument = instrument,
                     .side = side,
                     .type = OrderType::Limit,
@@ -123,13 +124,25 @@ TEST_F(MatchingTest, PartialFillRestsRemainderOnTheTakersSide) {
 }
 
 TEST_F(MatchingTest, SweepsMultipleLevelsBestPriceFirst) {
-    const auto ask100 = engine.apply(sequenced(limit_order(Side::Sell, 100, 5), 1), out);
+    // Distinct client order ids: the same trader rests three orders at once,
+    // and reusing one while it is still resting is a DuplicateClientOrderId
+    // reject (task 003), which is not what this test is about.
+    const auto ask100 = engine.apply(
+        sequenced(limit_order(Side::Sell, 100, 5, TraderId{1}, TimeInForce::Gtc, ClientOrderId{1}),
+                  1),
+        out);
     ASSERT_TRUE(ask100.has_value());
     const OrderId id100 = ask100->order_id;
-    const auto ask101 = engine.apply(sequenced(limit_order(Side::Sell, 101, 5), 2), out);
+    const auto ask101 = engine.apply(
+        sequenced(limit_order(Side::Sell, 101, 5, TraderId{1}, TimeInForce::Gtc, ClientOrderId{2}),
+                  2),
+        out);
     ASSERT_TRUE(ask101.has_value());
     const OrderId id101 = ask101->order_id;
-    const auto ask102 = engine.apply(sequenced(limit_order(Side::Sell, 102, 5), 3), out);
+    const auto ask102 = engine.apply(
+        sequenced(limit_order(Side::Sell, 102, 5, TraderId{1}, TimeInForce::Gtc, ClientOrderId{3}),
+                  3),
+        out);
     ASSERT_TRUE(ask102.has_value());
     const OrderId id102 = ask102->order_id;
     out.clear();
@@ -260,10 +273,18 @@ TEST_F(MatchingTest, MarketOrderOnAnEmptyBookIsFullyCancelled) {
 // like a (price-capped) limit order would cross no ask at all, since a
 // market order carries Price{0}, and leave nothing traded here.
 TEST_F(MatchingTest, MarketBuySweepsEveryRestingAskThenCancelsRemainder) {
-    const auto ask100 = engine.apply(sequenced(limit_order(Side::Sell, 100, 3), 1), out);
+    // Distinct client order ids: see the comment in
+    // SweepsMultipleLevelsBestPriceFirst.
+    const auto ask100 = engine.apply(
+        sequenced(limit_order(Side::Sell, 100, 3, TraderId{1}, TimeInForce::Gtc, ClientOrderId{1}),
+                  1),
+        out);
     ASSERT_TRUE(ask100.has_value());
     const OrderId id100 = ask100->order_id;
-    const auto ask105 = engine.apply(sequenced(limit_order(Side::Sell, 105, 3), 2), out);
+    const auto ask105 = engine.apply(
+        sequenced(limit_order(Side::Sell, 105, 3, TraderId{1}, TimeInForce::Gtc, ClientOrderId{2}),
+                  2),
+        out);
     ASSERT_TRUE(ask105.has_value());
     const OrderId id105 = ask105->order_id;
     out.clear();
@@ -291,10 +312,18 @@ TEST_F(MatchingTest, MarketBuySweepsEveryRestingAskThenCancelsRemainder) {
 // Mirror of MarketBuySweepsEveryRestingAskThenCancelsRemainder for the sell
 // side, against resting bids.
 TEST_F(MatchingTest, MarketSellSweepsEveryRestingBidThenCancelsRemainder) {
-    const auto bid105 = engine.apply(sequenced(limit_order(Side::Buy, 105, 3), 1), out);
+    // Distinct client order ids: see the comment in
+    // SweepsMultipleLevelsBestPriceFirst.
+    const auto bid105 = engine.apply(
+        sequenced(limit_order(Side::Buy, 105, 3, TraderId{1}, TimeInForce::Gtc, ClientOrderId{1}),
+                  1),
+        out);
     ASSERT_TRUE(bid105.has_value());
     const OrderId id105 = bid105->order_id;
-    const auto bid100 = engine.apply(sequenced(limit_order(Side::Buy, 100, 3), 2), out);
+    const auto bid100 = engine.apply(
+        sequenced(limit_order(Side::Buy, 100, 3, TraderId{1}, TimeInForce::Gtc, ClientOrderId{2}),
+                  2),
+        out);
     ASSERT_TRUE(bid100.has_value());
     const OrderId id100 = bid100->order_id;
     out.clear();

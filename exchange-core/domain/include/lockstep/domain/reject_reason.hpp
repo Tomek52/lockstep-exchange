@@ -17,6 +17,10 @@ enum class RejectReason : std::uint8_t {
     TradingHalted,
     UnknownOrder,
     NotOrderOwner,
+    /// A NewOrder reuses a (trader, client_order_id) pair that still has an
+    /// order resting on some book in the shard (task 003). Scoped to
+    /// currently-resting orders, not "ever used", so the id frees up as soon
+    /// as that order is filled or cancelled and can be reused right away.
     DuplicateClientOrderId,
     RiskUnavailable,
 };

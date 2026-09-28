@@ -98,6 +98,42 @@ void OrderBook::reduce_front(Side side, Quantity quantity, EventBuffer& out) {
     });
 }
 
+void OrderBook::reduce(OrderId id, Quantity quantity, EventBuffer& out) {
+    const auto found = slot_by_id_.find(id);
+    assert(found != slot_by_id_.end() && "reduce of an order that is not resting");
+    RestingOrder& order = pool_.node(found->second).order;
+    assert(Quantity{0} < quantity && quantity < order.remaining);
+
+    const Quantity delta = order.remaining - quantity;
+    order.remaining = quantity;
+    with_side(order.side, [&](auto& levels) {
+        auto&& [price, level] = *levels.find(order.price);
+        level.total -= delta;
+        out.push(BookLevelChanged{spec_.id, order.side, price, level.total});
+    });
+}
+
+std::optional<RestingOrder> OrderBook::take(OrderId id, EventBuffer& out) {
+    const auto found = slot_by_id_.find(id);
+    if (found == slot_by_id_.end()) {
+        return std::nullopt;
+    }
+    const Index slot = found->second;
+    const RestingOrder order = pool_.node(slot).order;  // copy: remove() frees the slot
+
+    with_side(order.side, [&](auto& levels) {
+        const auto level_it = levels.find(order.price);
+        Level& level = level_it->second;
+        remove(level, slot);
+        const Quantity remaining_at_level = level.total;
+        if (level.count == 0) {
+            levels.erase(level_it);
+        }
+        out.push(BookLevelChanged{spec_.id, order.side, order.price, remaining_at_level});
+    });
+    return order;
+}
+
 std::expected<Quantity, RejectReason> OrderBook::cancel(OrderId id,
                                                         TraderId requester,
                                                         CancelReason reason,

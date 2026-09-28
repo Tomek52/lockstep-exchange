@@ -1,5 +1,7 @@
 #include "lockstep/domain/shard_engine.hpp"
 
+#include <cassert>
+#include <optional>
 #include <variant>
 
 #include "lockstep/domain/matching.hpp"
@@ -37,6 +39,31 @@ OrderId ShardEngine::next_order_id() noexcept {
     return OrderId{(std::uint64_t{shard_.value()} << order_id_shard_shift) | order_counter_};
 }
 
+bool ShardEngine::is_duplicate_client_order(TraderId trader,
+                                            ClientOrderId client_order_id) noexcept {
+    const auto found = client_orders_.find({trader, client_order_id});
+    if (found == client_orders_.end()) {
+        return false;
+    }
+    const auto [instrument, order_id] = found->second;
+    const OrderBook* instrument_book = book(instrument);
+    if (instrument_book != nullptr && instrument_book->find(order_id) != nullptr) {
+        return true;
+    }
+    // Stale: that order is no longer resting, so the id is free to reuse
+    // (RejectReason::DuplicateClientOrderId doc, task 003).
+    client_orders_.erase(found);
+    return false;
+}
+
+void ShardEngine::track_client_order(TraderId trader,
+                                     ClientOrderId client_order_id,
+                                     InstrumentId instrument,
+                                     OrderId id) {
+    client_orders_.insert_or_assign(ClientOrderKey{trader, client_order_id},
+                                    std::pair{instrument, id});
+}
+
 CommandResult ShardEngine::on(const NewOrder& order, EventBuffer& out) {
     OrderBook* book = find_book(order.instrument);
     if (book == nullptr) {
@@ -47,6 +74,9 @@ CommandResult ShardEngine::on(const NewOrder& order, EventBuffer& out) {
         });
         !ok) {
         return std::unexpected(ok.error());
+    }
+    if (is_duplicate_client_order(order.trader, order.client_order_id)) {
+        return std::unexpected(RejectReason::DuplicateClientOrderId);
     }
 
     const OrderId id = next_order_id();
@@ -60,6 +90,7 @@ CommandResult ShardEngine::on(const NewOrder& order, EventBuffer& out) {
             book->rest(RestingOrder{id, order.trader, order.client_order_id, order.side,
                                     order.price, remaining},
                        out);
+            track_client_order(order.trader, order.client_order_id, order.instrument, id);
         } else {
             out.push(OrderCancelled{id, order.trader, order.instrument, remaining,
                                     CancelReason::ImmediateOrCancel});
@@ -77,8 +108,8 @@ CommandResult ShardEngine::on(const CancelOrder& cancel, EventBuffer& out) {
         .transform([&](Quantity /*cancelled*/) { return CommandOutcome{cancel.order_id}; });
 }
 
-CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& /*out*/) {
-    const OrderBook* book = find_book(modify.instrument);
+CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& out) {
+    OrderBook* book = find_book(modify.instrument);
     if (book == nullptr) {
         return std::unexpected(RejectReason::UnknownInstrument);
     }
@@ -92,11 +123,41 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& /*out*/) {
     if (resting->trader != modify.trader) {
         return std::unexpected(RejectReason::NotOrderOwner);
     }
-    // TODO(task-003): cancel/replace with priority rules. Reachable now that
-    // task 002 rests orders; until task 003 lands, a modify by the order's
-    // owner is refused with UnknownOrder, a placeholder reason rather than a
-    // literally correct one.
-    return std::unexpected(RejectReason::UnknownOrder);
+
+    // Same price and a smaller (or unchanged) quantity: shrink in place and
+    // keep the order's queue position (domain-model.md "Matching rules").
+    if (modify.new_price == resting->price && modify.new_quantity <= resting->remaining) {
+        out.push(OrderModified{modify.order_id, modify.trader, modify.instrument, modify.new_price,
+                               modify.new_quantity, /*kept_priority=*/true});
+        if (modify.new_quantity < resting->remaining) {
+            book->reduce(modify.order_id, modify.new_quantity, out);
+        }
+        return CommandOutcome{modify.order_id};
+    }
+
+    // Price change, or a larger quantity: cancel/replace. The order loses its
+    // queue position and re-enters as a new incoming order with the same
+    // OrderId, so it may trade before whatever remains rests at the tail.
+    out.push(OrderModified{modify.order_id, modify.trader, modify.instrument, modify.new_price,
+                           modify.new_quantity, /*kept_priority=*/false});
+    const std::optional<RestingOrder> taken = book->take(modify.order_id, out);
+    // `resting` was found on this same book just above, and nothing between
+    // then and here can remove it (single-writer, no reentrancy: ADR-0003),
+    // so take() always succeeds.
+    assert(taken.has_value());
+    const OrderAccepted incoming{modify.order_id,   modify.trader,      taken->client_order_id,
+                                 modify.instrument, taken->side,        OrderType::Limit,
+                                 modify.new_price,  modify.new_quantity};
+    const Quantity remaining = match(*book, incoming, out);
+    if (remaining > Quantity{0}) {
+        // Only GTC limit orders ever rest, so any order reachable here (via
+        // book->find() above) started as one; the remainder always rests
+        // rather than being IOC-cancelled.
+        book->rest(RestingOrder{modify.order_id, modify.trader, taken->client_order_id, taken->side,
+                                modify.new_price, remaining},
+                   out);
+    }
+    return CommandOutcome{modify.order_id};
 }
 
 CommandResult ShardEngine::on(const BlockTrader& block, EventBuffer& out) {
