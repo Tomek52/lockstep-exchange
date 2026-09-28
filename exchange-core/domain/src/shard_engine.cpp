@@ -2,6 +2,7 @@
 
 #include <variant>
 
+#include "lockstep/domain/matching.hpp"
 #include "lockstep/domain/validation.hpp"
 
 namespace lockstep::domain {
@@ -49,10 +50,21 @@ CommandResult ShardEngine::on(const NewOrder& order, EventBuffer& out) {
     }
 
     const OrderId id = next_order_id();
-    out.push(OrderAccepted{id, order.trader, order.client_order_id, order.instrument, order.side,
-                           order.type, order.price, order.quantity});
-    // TODO(task-002): match against the opposite side, then rest the remainder
-    // (GTC limit) or cancel it (IOC / market). The skeleton only acknowledges.
+    const OrderAccepted accepted{id,         order.trader, order.client_order_id, order.instrument,
+                                 order.side, order.type,   order.price,           order.quantity};
+    out.push(accepted);
+
+    const Quantity remaining = match(*book, accepted, out);
+    if (remaining > Quantity{0}) {
+        if (order.type == OrderType::Limit && order.time_in_force == TimeInForce::Gtc) {
+            book->rest(RestingOrder{id, order.trader, order.client_order_id, order.side,
+                                    order.price, remaining},
+                       out);
+        } else {
+            out.push(OrderCancelled{id, order.trader, order.instrument, remaining,
+                                    CancelReason::ImmediateOrCancel});
+        }
+    }
     return CommandOutcome{id};
 }
 

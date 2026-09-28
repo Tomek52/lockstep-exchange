@@ -36,7 +36,9 @@ TEST_F(ShardEngineTest, AcceptsValidOrderWithShardScopedId) {
 
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->order_id.value() >> ShardEngine::order_id_shard_shift, 2U);
-    ASSERT_EQ(out.size(), 1U);
+    // Non-crossing GTC limit: OrderAccepted, then BookLevelChanged as it rests
+    // (task 002 matching).
+    ASSERT_EQ(out.size(), 2U);
     const auto& accepted = std::get<OrderAccepted>(out.events()[0]);
     EXPECT_EQ(accepted.order_id, result->order_id);
     EXPECT_EQ(accepted.trader, TraderId{42});

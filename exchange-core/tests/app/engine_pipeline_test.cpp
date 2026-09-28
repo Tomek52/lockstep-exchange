@@ -54,8 +54,11 @@ TEST_F(EnginePipelineTest, AcceptedOrderIsJournaledAppliedPublishedAndAcked) {
     ASSERT_EQ(journaled.size(), 1U);
     EXPECT_EQ(std::get<NewOrder>(journaled[0].command), buy(InstrumentId{2}));
 
-    ASSERT_EQ(subscriber.events().size(), 1U);
+    // Non-crossing GTC limit: OrderAccepted, then BookLevelChanged as it rests
+    // (task 002 matching).
+    ASSERT_EQ(subscriber.events().size(), 2U);
     EXPECT_TRUE(std::holds_alternative<OrderAccepted>(subscriber.events()[0].event));
+    EXPECT_TRUE(std::holds_alternative<BookLevelChanged>(subscriber.events()[1].event));
 }
 
 TEST_F(EnginePipelineTest, DomainRejectionIsJournaledAndReturnedAsError) {

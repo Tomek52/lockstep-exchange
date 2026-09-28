@@ -135,7 +135,7 @@ ROADMAP.md                milestones → task specs
 | Build: CMake presets (debug, release, clang-debug, asan-ubsan, tsan), feature probe, architecture rules | ✅ |
 | CI: C++ on 5 presets, clang-tidy, fuzzing, Rust, proto checks, e2e, Docker | ✅ all 11 jobs green on GitHub Actions |
 | Contracts: `lockstep.v1` protos, codegen in CMake and `build.rs` | ✅ |
-| Domain: strong types, validation, pooled order book with O(1) cancel, shard engine acknowledging orders | ✅ (matching: [M1](ROADMAP.md)) |
+| Domain: strong types, validation, pooled order book with O(1) cancel, price-time matching for limit and market orders | ✅ (modify/duplicates, risk controls: [M1](ROADMAP.md)) |
 | Runtime: shards + publisher on `std::jthread`, write-ahead ordering, lossless shutdown | ✅ on placeholder mutex queues (lock-free: [M2](ROADMAP.md)) |
 | Order entry over gRPC, end to end | ✅ |
 | Risk session handshake + inbound risk commands | ✅ (reports, acks, reconnect: task 014) |

@@ -1,6 +1,7 @@
 # The domain is the heart of the system and depends on nothing but the C++
 # standard library: no gRPC, no protobuf, no threads, no I/O (ADR-0002).
 add_library(lockstep_domain STATIC
+  src/matching.cpp
   src/order_book.cpp
   src/risk_state.cpp
   src/shard_engine.cpp)
