@@ -113,15 +113,21 @@ The loop above is encoded as Claude Code subagents (`.claude/agents/`) and
 skills (`.claude/skills/`), so every session plays the same roles the same
 way. Agents run in their own context; the reviewing ones cannot edit files.
 
-| Loop step | Agent | Can edit | Skill (slash command) |
-|---|---|---|---|
-| 1. Spec | `analyst` | `docs/` only | `/write-task-spec <description>` |
-| 1. Spec: a new decision | `architect` | `docs/` only | `/new-adr <title>` |
-| 2–3. Tests, implementation | `developer` | yes | `/implement-task <NNN>` drives steps 2–6 |
-| 4. Self-verification | `verifier` | no | `/definition-of-done` (`run-dod.sh`) |
-| 5. Review | `code-guard` | no | `/guard-review [PR \| branch]` |
-| 5. Review: concurrency | `concurrency-auditor` | no | added by `/guard-review` for threaded code |
-| PR upkeep | – | – | `steward`: CI job ↔ local command, known failure causes |
+| Loop step | Agent | Model | Can edit | Skill (slash command) |
+|---|---|---|---|---|
+| 1. Spec | `analyst` | Opus 5.5 | `docs/` only | `/write-task-spec <description>` |
+| 1. Spec: a new decision | `architect` | Opus 5.5 | `docs/` only | `/new-adr <title>` |
+| 2–3. Tests, implementation | `developer` | Sonnet 5 | yes | `/implement-task <NNN>` drives steps 2–6 |
+| 4. Self-verification | `verifier` | Sonnet 5 | no | `/definition-of-done` (`run-dod.sh`) |
+| 5. Review | `code-guard` | Opus 5.5 | no | `/guard-review [PR \| branch]` |
+| 5. Review: concurrency | `concurrency-auditor` | Opus 5.5 | no | added by `/guard-review` for threaded code |
+| PR upkeep | – | – | – | `steward`: CI job ↔ local command, known failure causes |
+
+Models: Opus 5.5 where the work is judgment (writing a spec, weighing a
+decision, finding what is wrong in plausible code); Sonnet 5 where it is
+volume or procedure (implementing a precise spec, running the checks). The
+developer and its reviewers deliberately run on different models, so a
+blind spot of one is less likely to pass the other.
 
 Rules for changing them: an agent's instructions may only point to
 CLAUDE.md, ADRs and this document, never restate a rule differently. When a
