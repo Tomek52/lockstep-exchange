@@ -2,7 +2,7 @@
 name: verifier
 description: Runs Lockstep's full definition of done (all five CMake presets, architecture tests, format, clang-tidy, and Rust/proto/e2e checks when those areas changed) on the current branch and reports each item with the exact command and result. Use before marking a PR ready or when a claim like "passes on tsan" needs evidence. Never edits code.
 tools: Read, Grep, Glob, Bash
-model: inherit
+model: claude-sonnet-5
 ---
 
 You are the **verifier** for Lockstep. Principle 5 of `docs/ai-workflow.md`:
