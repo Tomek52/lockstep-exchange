@@ -74,8 +74,8 @@ public:
 
     /// Number of distinct (trader, client_order_id) pairs currently resting
     /// (task 003): tracks order_count() exactly, since client_order_ids_ is
-    /// inserted in rest() and erased in remove() alongside slot_by_id_. For
-    /// tests only.
+    /// inserted in rest() and erased in remove() alongside slot_by_id_, as long
+    /// as rest()'s client-id precondition holds. For tests only.
     [[nodiscard]] std::size_t client_order_index_size() const noexcept {
         return client_order_ids_.size();
     }
@@ -87,7 +87,9 @@ public:
 
     /// Appends `order` at the tail of its price level and emits BookLevelChanged.
     /// Preconditions: the order does not cross the opposite side (the matcher
-    /// has already consumed any crossing quantity), and its id is not resting.
+    /// has already consumed any crossing quantity), its id is not resting, and
+    /// no order with the same (trader, client_order_id) is resting on this book
+    /// (check has_resting_client_order() first).
     void rest(const RestingOrder& order, EventBuffer& out);
 
     /// Reduces the remaining quantity of the order returned by front(side) by
