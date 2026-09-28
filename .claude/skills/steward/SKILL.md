@@ -11,7 +11,7 @@ description: Repository conventions for driving a Lockstep pull request to green
 |---|---|
 | `C++ <preset>` (debug, release, clang-debug, asan-ubsan, tsan) | `cmake --preset P && cmake --build --preset P && ctest --preset P` |
 | `Format + clang-tidy` | `git add -N <new files>`, then `scripts/check-format.sh` and `scripts/run-clang-tidy.sh` |
-| `Fuzz (60 s)` | `asan-ubsan` preset, then the fuzz target from `.github/workflows/ci.yml` |
+| `Fuzz (60 s)` | `cmake --preset asan-ubsan && cmake --build --preset asan-ubsan --target order_entry_decode_fuzzer`, then `mkdir -p corpus && build/asan-ubsan/exchange-core/fuzz/order_entry_decode_fuzzer corpus -max_total_time=60` |
 | `Rust` | `cd rust && cargo fmt --all -- --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked` |
 | `Proto consistency` | `scripts/check-proto.sh` |
 | `End-to-end smoke` | debug build, `cd rust && cargo build --locked`, `scripts/e2e-smoke.sh` |
