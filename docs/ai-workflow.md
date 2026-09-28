@@ -111,12 +111,15 @@ seen most often:
 
 The loop above is encoded as Claude Code subagents (`.claude/agents/`) and
 skills (`.claude/skills/`), so every session plays the same roles the same
-way. Agents run in their own context; the reviewing ones cannot edit files.
+way. Agents run in their own context. The reviewing agents get no Write or
+Edit tool; they keep Bash to build and test, so "never modify files" is an
+instruction for them, not a hard limit. The same holds for the `docs/`-only
+rule of the analyst and architect.
 
-| Loop step | Agent | Model | Can edit | Skill (slash command) |
+| Loop step | Agent | Model | Write/Edit tools | Skill (slash command) |
 |---|---|---|---|---|
-| 1. Spec | `analyst` | Opus 5.5 | `docs/` only | `/write-task-spec <description>` |
-| 1. Spec: a new decision | `architect` | Opus 5.5 | `docs/` only | `/new-adr <title>` |
+| 1. Spec | `analyst` | Opus 5.5 | yes, `docs/` only by instruction | `/write-task-spec <description>` |
+| 1. Spec: a new decision | `architect` | Opus 5.5 | yes, `docs/` only by instruction | `/new-adr <title>` |
 | 2–3. Tests, implementation | `developer` | Sonnet 5 | yes | `/implement-task <NNN>` drives steps 2–6 |
 | 4. Self-verification | `verifier` | Sonnet 5 | no | `/definition-of-done` (`run-dod.sh`) |
 | 5. Review | `code-guard` | Opus 5.5 | no | `/guard-review [PR \| branch]` |
