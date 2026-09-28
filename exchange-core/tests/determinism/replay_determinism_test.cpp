@@ -2,10 +2,11 @@
 // run happened to take, replaying each shard's journal into a fresh ShardEngine
 // must reproduce that shard's events, replies and book state exactly.
 //
-// SKELETON STATUS: the engine does not match yet, so the event stream is mostly
-// OrderAccepted/rejections. Task 010 extends the generator (fills, cancels,
-// modifies, risk commands) and adds file-journal round trips; the structure of
-// the property stays the same.
+// SKELETON STATUS: the generator only sends NewOrder/CancelOrder, so the
+// event stream now includes fills and rests (task 002 matches) alongside
+// rejections, but no modifies or risk commands yet. Task 010 extends the
+// generator further and adds file-journal round trips; the structure of the
+// property stays the same.
 #include <algorithm>
 #include <cstdint>
 #include <map>

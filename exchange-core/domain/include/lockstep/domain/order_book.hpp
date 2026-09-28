@@ -47,8 +47,10 @@ struct BookSnapshot {
 /// Pointers returned by find() and front() are invalidated by the next call
 /// that mutates the book (rest, reduce_front, cancel, cancel_if).
 ///
-/// SKELETON STATUS: matching is not implemented yet; see
-/// docs/tasks/002-matching-limit-market.md.
+/// Crossing an incoming order against this book (deciding what trades and at
+/// what price) is not this class's job: it lives in lockstep::domain::match
+/// (matching.hpp), which drives front()/reduce_front() below. This class only
+/// stores and mutates the resting side.
 class OrderBook {
 public:
     explicit OrderBook(InstrumentSpec spec) noexcept;

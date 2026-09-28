@@ -6,8 +6,9 @@ namespace lockstep::domain {
 
 namespace {
 
-// A market order matches any resting price; a limit order only matches
-// resting prices at least as good as its own.
+// The price-crossing rule (docs/architecture/domain-model.md "Matching
+// rules"): a market order has no price limit; a limit order may trade only
+// within its own limit.
 [[nodiscard]] bool crosses(const OrderAccepted& incoming, Price maker_price) noexcept {
     if (incoming.type == OrderType::Market) {
         return true;

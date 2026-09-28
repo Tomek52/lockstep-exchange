@@ -92,8 +92,10 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& /*out*/) {
     if (resting->trader != modify.trader) {
         return std::unexpected(RejectReason::NotOrderOwner);
     }
-    // TODO(task-003): cancel/replace with priority rules. Unreachable in the
-    // skeleton because nothing rests on the book until task 002.
+    // TODO(task-003): cancel/replace with priority rules. Reachable now that
+    // task 002 rests orders; until task 003 lands, any resting order's modify
+    // is refused with UnknownOrder, a placeholder reason rather than a
+    // literally correct one.
     return std::unexpected(RejectReason::UnknownOrder);
 }
 
