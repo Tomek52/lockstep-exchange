@@ -1,5 +1,6 @@
 #include "lockstep/domain/shard_engine.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <optional>
 #include <variant>
@@ -40,28 +41,14 @@ OrderId ShardEngine::next_order_id() noexcept {
 }
 
 bool ShardEngine::is_duplicate_client_order(TraderId trader,
-                                            ClientOrderId client_order_id) noexcept {
-    const auto found = client_orders_.find({trader, client_order_id});
-    if (found == client_orders_.end()) {
-        return false;
-    }
-    const auto [instrument, order_id] = found->second;
-    const OrderBook* instrument_book = book(instrument);
-    if (instrument_book != nullptr && instrument_book->find(order_id) != nullptr) {
-        return true;
-    }
-    // Stale: that order is no longer resting, so the id is free to reuse
-    // (RejectReason::DuplicateClientOrderId doc, task 003).
-    client_orders_.erase(found);
-    return false;
-}
-
-void ShardEngine::track_client_order(TraderId trader,
-                                     ClientOrderId client_order_id,
-                                     InstrumentId instrument,
-                                     OrderId id) {
-    client_orders_.insert_or_assign(ClientOrderKey{trader, client_order_id},
-                                    std::pair{instrument, id});
+                                            ClientOrderId client_order_id) const noexcept {
+    // A boolean answer does not depend on visiting order (ADR-0004: nothing
+    // here is influenced by *which* book answers true first), but books_ is
+    // still walked in its ordinary deterministic flat_map order, for
+    // consistency with the rest of the engine rather than out of necessity.
+    return std::ranges::any_of(books_, [trader, client_order_id](const auto& entry) {
+        return entry.second.has_resting_client_order(trader, client_order_id);
+    });
 }
 
 CommandResult ShardEngine::on(const NewOrder& order, EventBuffer& out) {
@@ -90,7 +77,6 @@ CommandResult ShardEngine::on(const NewOrder& order, EventBuffer& out) {
             book->rest(RestingOrder{id, order.trader, order.client_order_id, order.side,
                                     order.price, remaining},
                        out);
-            track_client_order(order.trader, order.client_order_id, order.instrument, id);
         } else {
             out.push(OrderCancelled{id, order.trader, order.instrument, remaining,
                                     CancelReason::ImmediateOrCancel});

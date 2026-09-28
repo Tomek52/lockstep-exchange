@@ -21,6 +21,9 @@ enum class RejectReason : std::uint8_t {
     /// order resting on some book in the shard (task 003). Scoped to
     /// currently-resting orders, not "ever used", so the id frees up as soon
     /// as that order is filled or cancelled and can be reused right away.
+    /// Checked after price/quantity validation and the risk check, so a
+    /// NewOrder that would fail either of those is rejected for that reason
+    /// instead, even if its client_order_id also collides.
     DuplicateClientOrderId,
     RiskUnavailable,
 };

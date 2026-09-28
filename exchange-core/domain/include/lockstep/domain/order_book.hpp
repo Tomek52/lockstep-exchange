@@ -8,6 +8,7 @@
 #include <iterator>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -71,6 +72,19 @@ public:
     /// benchmarks only.
     [[nodiscard]] std::size_t pool_capacity() const noexcept { return pool_.capacity(); }
 
+    /// Number of distinct (trader, client_order_id) pairs currently resting
+    /// (task 003): tracks order_count() exactly, since client_order_ids_ is
+    /// inserted in rest() and erased in remove() alongside slot_by_id_. For
+    /// tests only.
+    [[nodiscard]] std::size_t client_order_index_size() const noexcept {
+        return client_order_ids_.size();
+    }
+
+    /// True if (trader, client_order_id) currently names a resting order on
+    /// this book (RejectReason::DuplicateClientOrderId, task 003).
+    [[nodiscard]] bool has_resting_client_order(TraderId trader,
+                                                ClientOrderId client_order_id) const noexcept;
+
     /// Appends `order` at the tail of its price level and emits BookLevelChanged.
     /// Preconditions: the order does not cross the opposite side (the matcher
     /// has already consumed any crossing quantity), and its id is not resting.
@@ -131,6 +145,26 @@ private:
     using BidLevels = flat_map<Price, Level, std::greater<>>;
     using AskLevels = flat_map<Price, Level, std::less<>>;
 
+    // Key for the duplicate-client-id index (task 003).
+    struct ClientOrderKey {
+        TraderId trader;
+        ClientOrderId client_order_id;
+        friend constexpr bool operator==(const ClientOrderKey&, const ClientOrderKey&) = default;
+    };
+    struct ClientOrderKeyHash {
+        [[nodiscard]] std::size_t operator()(const ClientOrderKey& key) const noexcept {
+            // hash_combine-style mix (Boost's formulation): std::hash<uint64_t>
+            // is the identity function on libstdc++, so combining the two
+            // StrongIntHash values with plain XOR collides structurally (e.g.
+            // trader and client_order_id swapped, or either shifted by a power
+            // of two) - flagged in task-003 review.
+            std::size_t seed = StrongIntHash{}(key.trader);
+            seed ^= StrongIntHash{}(key.client_order_id) + 0x9e3779b97f4a7c15ULL + (seed << 6) +
+                    (seed >> 2);
+            return seed;
+        }
+    };
+
     /// Bids and asks have different map types (their comparators differ), so
     /// side-generic code is written once as a generic lambda and dispatched
     /// here. Deducing this forwards the object's constness to the lambda.
@@ -161,6 +195,12 @@ private:
     // Makes find() and cancel() O(1). Hash order is unspecified, so this map
     // is only ever looked up, never iterated (ADR-0004).
     std::unordered_map<OrderId, Index, StrongIntHash> slot_by_id_;
+    // Backs has_resting_client_order() (task 003). Inserted in rest(), erased
+    // in remove(), the single choke point every removal path (cancel,
+    // reduce_front's full fill, cancel_if, take) already goes through, so
+    // this stays exact rather than needing its own sync or self-healing.
+    // Hash order is unspecified, so, like slot_by_id_, only ever looked up.
+    std::unordered_set<ClientOrderKey, ClientOrderKeyHash> client_order_ids_;
 };
 
 template <std::predicate<const RestingOrder&> Pred>
