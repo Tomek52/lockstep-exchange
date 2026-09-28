@@ -5,7 +5,9 @@ You are working on **Lockstep**: a deterministic exchange engine (C++23,
 talking over gRPC (`proto/`). Architecture overview:
 [docs/architecture/README.md](docs/architecture/README.md). Decisions and their
 reasons: [docs/adr/](docs/adr/README.md). The workflow you are part of:
-[docs/ai-workflow.md](docs/ai-workflow.md).
+[docs/ai-workflow.md](docs/ai-workflow.md). Its roles are available as
+subagents in `.claude/agents/` and its steps as skills in `.claude/skills/`
+(see "Agents and skills" in ai-workflow.md).
 
 If a task spec (`docs/tasks/NNN-*.md`) was given to you, it is your contract.
 Read it, and every ADR it links, **before** writing code.
