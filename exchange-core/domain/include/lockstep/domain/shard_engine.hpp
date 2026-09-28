@@ -72,15 +72,15 @@ private:
     [[nodiscard]] OrderBook* find_book(InstrumentId instrument) noexcept;
     [[nodiscard]] OrderId next_order_id() noexcept;
 
-    /// True if (trader, client_order_id) is still resting on some book in the
-    /// shard (RejectReason::DuplicateClientOrderId, task 003). Self-heals
-    /// `client_orders_`: a stale entry (its order since filled or cancelled)
-    /// is erased here rather than kept in sync at every removal site, since
-    /// this lookup is the only place that needs the answer.
+    // True if (trader, client_order_id) is still resting on some book in the
+    // shard (RejectReason::DuplicateClientOrderId, task 003). Self-heals
+    // client_orders_: a stale entry (its order since filled or cancelled) is
+    // erased here rather than kept in sync at every removal site, since this
+    // lookup is the only place that needs the answer.
     [[nodiscard]] bool is_duplicate_client_order(TraderId trader,
                                                  ClientOrderId client_order_id) noexcept;
-    /// Records that (trader, client_order_id) now names the resting order
-    /// `id` on `instrument`, for later is_duplicate_client_order() lookups.
+    // Records that (trader, client_order_id) now names the resting order
+    // `id` on `instrument`, for later is_duplicate_client_order() lookups.
     void track_client_order(TraderId trader,
                             ClientOrderId client_order_id,
                             InstrumentId instrument,
