@@ -257,8 +257,8 @@ TEST_F(MatchingTest, MarketOrderOnAnEmptyBookIsFullyCancelled) {
 // A market order is a limit order with no price cap, so it must sweep every
 // resting price on the opposite side, not just the best one, before any
 // unfilled remainder is cancelled. A mutant that made market orders match
-// like a (price-capped) limit order would stop after the level at price 0
-// and leave nothing traded here.
+// like a (price-capped) limit order would cross no ask at all, since a
+// market order carries Price{0}, and leave nothing traded here.
 TEST_F(MatchingTest, MarketBuySweepsEveryRestingAskThenCancelsRemainder) {
     const auto ask100 = engine.apply(sequenced(limit_order(Side::Sell, 100, 3), 1), out);
     ASSERT_TRUE(ask100.has_value());
