@@ -261,6 +261,80 @@ TEST_F(ModifyTest, PartialFillOnReplaceRestsTheRemainderAtTheNewPrice) {
     EXPECT_EQ(remainder->remaining, Quantity{7});
 }
 
+TEST_F(ModifyTest, PriceChangeWithSmallerQuantityNonCrossingLosesPriorityOnBuy) {
+    // Regression for task-003 review: a price change must always cancel and
+    // replace, even when the new quantity is also smaller than the current
+    // remaining. `resting->price` differs from `modify.new_price` here, so a
+    // condition that only looks at the quantity comparison (survived mutant:
+    // `(new_price == price || new_quantity < remaining) && new_quantity <=
+    // remaining`) would wrongly take the keep-priority path and never move
+    // the order to price 95.
+    const auto moved = engine.apply(
+        sequenced(limit_order(Side::Buy, 90, 10, TraderId{1}, ClientOrderId{1}), 1), out);
+    ASSERT_TRUE(moved.has_value());
+    const OrderId moved_id = moved->order_id;
+    out.clear();
+    const auto already_there = engine.apply(
+        sequenced(limit_order(Side::Buy, 95, 5, TraderId{2}, ClientOrderId{1}), 2), out);
+    ASSERT_TRUE(already_there.has_value());
+    const OrderId already_there_id = already_there->order_id;
+    out.clear();
+
+    // Smaller quantity (6 < 10) at a different price (95 != 90): no resting
+    // sell order to cross, so this rests rather than trading.
+    const auto result = engine.apply(sequenced(modify(moved_id, 95, 6), 3), out);
+
+    ASSERT_TRUE(result.has_value());
+    const std::vector<Event> expected{
+        OrderModified{moved_id, TraderId{1}, instrument, Price{95}, Quantity{6}, false},
+        BookLevelChanged{instrument, Side::Buy, Price{90}, Quantity{0}},
+        BookLevelChanged{instrument, Side::Buy, Price{95}, Quantity{11}},
+    };
+    EXPECT_EQ(events_vector(out), expected);
+
+    EXPECT_EQ(engine.book(instrument)->best_price(Side::Buy), Price{95});
+    const RestingOrder* front = engine.book(instrument)->front(Side::Buy);
+    ASSERT_NE(front, nullptr);
+    EXPECT_EQ(front->id, already_there_id);
+    const RestingOrder* moved_order = engine.book(instrument)->find(moved_id);
+    ASSERT_NE(moved_order, nullptr);
+    EXPECT_EQ(moved_order->price, Price{95});
+    EXPECT_EQ(moved_order->remaining, Quantity{6});
+}
+
+TEST_F(ModifyTest, PriceChangeWithSmallerQuantityNonCrossingLosesPriorityOnSell) {
+    // Mirror of PriceChangeWithSmallerQuantityNonCrossingLosesPriorityOnBuy.
+    const auto moved = engine.apply(
+        sequenced(limit_order(Side::Sell, 110, 10, TraderId{1}, ClientOrderId{1}), 1), out);
+    ASSERT_TRUE(moved.has_value());
+    const OrderId moved_id = moved->order_id;
+    out.clear();
+    const auto already_there = engine.apply(
+        sequenced(limit_order(Side::Sell, 105, 5, TraderId{2}, ClientOrderId{1}), 2), out);
+    ASSERT_TRUE(already_there.has_value());
+    const OrderId already_there_id = already_there->order_id;
+    out.clear();
+
+    const auto result = engine.apply(sequenced(modify(moved_id, 105, 6), 3), out);
+
+    ASSERT_TRUE(result.has_value());
+    const std::vector<Event> expected{
+        OrderModified{moved_id, TraderId{1}, instrument, Price{105}, Quantity{6}, false},
+        BookLevelChanged{instrument, Side::Sell, Price{110}, Quantity{0}},
+        BookLevelChanged{instrument, Side::Sell, Price{105}, Quantity{11}},
+    };
+    EXPECT_EQ(events_vector(out), expected);
+
+    EXPECT_EQ(engine.book(instrument)->best_price(Side::Sell), Price{105});
+    const RestingOrder* front = engine.book(instrument)->front(Side::Sell);
+    ASSERT_NE(front, nullptr);
+    EXPECT_EQ(front->id, already_there_id);
+    const RestingOrder* moved_order = engine.book(instrument)->find(moved_id);
+    ASSERT_NE(moved_order, nullptr);
+    EXPECT_EQ(moved_order->price, Price{105});
+    EXPECT_EQ(moved_order->remaining, Quantity{6});
+}
+
 TEST_F(ModifyTest, ModifyByNonOwnerIsRejectedAndLeavesTheBookUnchanged) {
     const auto first = engine.apply(sequenced(limit_order(Side::Buy, 100, 10), 1), out);
     ASSERT_TRUE(first.has_value());
@@ -327,6 +401,48 @@ TEST_F(ModifyTest, NewOrderWithDuplicateClientIdWhileRestingIsRejected) {
     const auto other_trader = engine.apply(
         sequenced(limit_order(Side::Sell, 110, 5, TraderId{2}, ClientOrderId{7}), 3), out);
     EXPECT_TRUE(other_trader.has_value());
+}
+
+TEST_F(ModifyTest, DuplicateClientIdStillRejectedAfterModifyMovesTheOrder) {
+    // Regression for task-003 review: a cancel/replace modify keeps the same
+    // OrderId and client_order_id, so the id must still read as in-use after
+    // the order moves to a new price, not just while it sits at its original
+    // one.
+    const auto first = engine.apply(
+        sequenced(limit_order(Side::Buy, 90, 5, TraderId{1}, ClientOrderId{7}), 1), out);
+    ASSERT_TRUE(first.has_value());
+    const OrderId first_id = first->order_id;
+    out.clear();
+
+    const auto modify_result = engine.apply(sequenced(modify(first_id, 95, 5), 2), out);
+    ASSERT_TRUE(modify_result.has_value());
+    ASSERT_NE(engine.book(instrument)->find(first_id), nullptr);
+    out.clear();
+
+    const auto duplicate = engine.apply(
+        sequenced(limit_order(Side::Sell, 110, 5, TraderId{1}, ClientOrderId{7}), 3), out);
+    ASSERT_FALSE(duplicate.has_value());
+    EXPECT_EQ(duplicate.error(), RejectReason::DuplicateClientOrderId);
+}
+
+TEST_F(ModifyTest, DuplicateClientIdIsRejectedOnEveryResubmission) {
+    // Regression for task-003 review: a rejected NewOrder must not disturb
+    // the index, or a rejected duplicate could free the very id it collided
+    // with.
+    const auto first = engine.apply(
+        sequenced(limit_order(Side::Buy, 100, 5, TraderId{1}, ClientOrderId{7}), 1), out);
+    ASSERT_TRUE(first.has_value());
+    out.clear();
+
+    const auto duplicate_once = engine.apply(
+        sequenced(limit_order(Side::Sell, 110, 5, TraderId{1}, ClientOrderId{7}), 2), out);
+    ASSERT_FALSE(duplicate_once.has_value());
+    EXPECT_EQ(duplicate_once.error(), RejectReason::DuplicateClientOrderId);
+
+    const auto duplicate_twice = engine.apply(
+        sequenced(limit_order(Side::Sell, 110, 5, TraderId{1}, ClientOrderId{7}), 3), out);
+    ASSERT_FALSE(duplicate_twice.has_value());
+    EXPECT_EQ(duplicate_twice.error(), RejectReason::DuplicateClientOrderId);
 }
 
 TEST_F(ModifyTest, ClientIdIsReusableAfterTheOriginalOrderIsCancelled) {
