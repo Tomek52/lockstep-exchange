@@ -49,6 +49,11 @@ const RestingOrder* OrderBook::find(OrderId id) const noexcept {
     return it == slot_by_id_.end() ? nullptr : &pool_.node(it->second).order;
 }
 
+bool OrderBook::has_resting_client_order(TraderId trader,
+                                         ClientOrderId client_order_id) const noexcept {
+    return client_order_ids_.contains(ClientOrderKey{trader, client_order_id});
+}
+
 const RestingOrder* OrderBook::front(Side side) const noexcept {
     return with_side(side, [this](const auto& levels) -> const RestingOrder* {
         if (levels.empty()) {
@@ -62,6 +67,13 @@ void OrderBook::rest(const RestingOrder& order, EventBuffer& out) {
     const Index slot = pool_.acquire(order);
     [[maybe_unused]] const auto [pos, inserted] = slot_by_id_.try_emplace(order.id, slot);
     assert(inserted && "order id is already resting");
+    [[maybe_unused]] const auto [cid_pos, cid_inserted] =
+        client_order_ids_.insert(ClientOrderKey{order.trader, order.client_order_id});
+    // ShardEngine rejects a NewOrder whose (trader, client_order_id) is still
+    // resting (RejectReason::DuplicateClientOrderId), and ModifyOrder's
+    // cancel/replace always take()s the old entry - which erases this key -
+    // before resting the replacement, so this insert never collides.
+    assert(cid_inserted && "client order id is already resting for this trader");
 
     with_side(order.side, [&](auto& levels) {
         auto&& [price, level] = *levels.try_emplace(order.price).first;
@@ -96,6 +108,42 @@ void OrderBook::reduce_front(Side side, Quantity quantity, EventBuffer& out) {
             levels.erase(it);
         }
     });
+}
+
+void OrderBook::reduce(OrderId id, Quantity quantity, EventBuffer& out) {
+    const auto found = slot_by_id_.find(id);
+    assert(found != slot_by_id_.end() && "reduce of an order that is not resting");
+    RestingOrder& order = pool_.node(found->second).order;
+    assert(Quantity{0} < quantity && quantity < order.remaining);
+
+    const Quantity delta = order.remaining - quantity;
+    order.remaining = quantity;
+    with_side(order.side, [&](auto& levels) {
+        auto&& [price, level] = *levels.find(order.price);
+        level.total -= delta;
+        out.push(BookLevelChanged{spec_.id, order.side, price, level.total});
+    });
+}
+
+std::optional<RestingOrder> OrderBook::take(OrderId id, EventBuffer& out) {
+    const auto found = slot_by_id_.find(id);
+    if (found == slot_by_id_.end()) {
+        return std::nullopt;
+    }
+    const Index slot = found->second;
+    const RestingOrder order = pool_.node(slot).order;  // copy: remove() frees the slot
+
+    with_side(order.side, [&](auto& levels) {
+        const auto level_it = levels.find(order.price);
+        Level& level = level_it->second;
+        remove(level, slot);
+        const Quantity remaining_at_level = level.total;
+        if (level.count == 0) {
+            levels.erase(level_it);
+        }
+        out.push(BookLevelChanged{spec_.id, order.side, order.price, remaining_at_level});
+    });
+    return order;
 }
 
 std::expected<Quantity, RejectReason> OrderBook::cancel(OrderId id,
@@ -141,6 +189,7 @@ void OrderBook::remove(Level& level, Index slot) noexcept {
     --level.count;
     level.total -= node.order.remaining;
     slot_by_id_.erase(node.order.id);
+    client_order_ids_.erase(ClientOrderKey{node.order.trader, node.order.client_order_id});
     pool_.release(slot);
 }
 

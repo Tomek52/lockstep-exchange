@@ -19,9 +19,13 @@ classDiagram
         +quantity_at(Side, Price) Quantity
         +snapshot() BookSnapshot
         +rest(RestingOrder, EventBuffer&)
+        +reduce(OrderId, Quantity, EventBuffer&)
+        +take(OrderId, EventBuffer&) optional~RestingOrder~
         +cancel(OrderId, TraderId, CancelReason, EventBuffer&) expected~Quantity, RejectReason~
+        +has_resting_client_order(TraderId, ClientOrderId) bool
         -bids_ : flat_map~Price, Level, greater~
         -asks_ : flat_map~Price, Level, less~
+        -client_order_ids_ : unordered_set~(TraderId, ClientOrderId)~
     }
     class RiskState {
         +check_new_order(TraderId) expected~void, RejectReason~
@@ -93,6 +97,14 @@ and its boundary cases are `static_assert`ed.
   remainder is cancelled (`CancelReason::ImmediateOrCancel`).
 - **Modify.** Reducing quantity at the same price keeps priority. A price
   change or quantity increase loses priority (cancel/replace).
+- **Duplicate client order ids (task 003).** A NewOrder is rejected
+  (`RejectReason::DuplicateClientOrderId`) if `(trader, client_order_id)`
+  already names an order resting on any book the shard owns; the id is free
+  again as soon as that order is filled or cancelled. Each `OrderBook` keeps
+  this index exactly in sync with what it has resting (inserted in `rest()`,
+  erased in the same `remove()` every cancel/fill/replace path already goes
+  through), so `ShardEngine` only ever asks each of its books, never
+  iterating a hash container for the answer (ADR-0004).
 - **Self-trade.** Allowed in v1 (documented simplification).
 - **Blocked trader.** New orders are rejected and resting orders cancelled.
   **Kill switch:** every instrument is halted and resting orders cancelled.

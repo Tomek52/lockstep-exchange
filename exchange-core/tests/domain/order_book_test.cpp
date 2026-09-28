@@ -78,6 +78,28 @@ TEST_F(OrderBookTest, CancelRemovesOrderAndEmptyLevel) {
     EXPECT_EQ(std::get<BookLevelChanged>(out.events()[1]).quantity, Quantity{0});
 }
 
+TEST_F(OrderBookTest, ClientOrderIndexTracksRestingOrdersExactlyNotCumulatively) {
+    // Regression for task-003 review: the duplicate-client-id index must stay
+    // in sync with what is actually resting, not just grow whenever a new
+    // (trader, client_order_id) pair is seen. Resting and cancelling many
+    // orders with distinct client ids, all for one trader, reproduces the
+    // reported bug (resting 0, index 100000) at a size this test can run
+    // quickly; the fix (task-003 review) makes remove() erase it exactly.
+    constexpr std::uint64_t total_orders = 5'000;
+    for (std::uint64_t i = 1; i <= total_orders; ++i) {
+        book.rest(order(i, Side::Buy, 100, 1, /*trader=*/1), out);
+    }
+    ASSERT_EQ(book.order_count(), total_orders);
+    EXPECT_EQ(book.client_order_index_size(), total_orders);
+
+    for (std::uint64_t i = 1; i <= total_orders; ++i) {
+        ASSERT_TRUE(
+            book.cancel(OrderId{i}, TraderId{1}, CancelReason::UserRequested, out).has_value());
+    }
+    EXPECT_EQ(book.order_count(), 0U);
+    EXPECT_EQ(book.client_order_index_size(), 0U);
+}
+
 TEST_F(OrderBookTest, CancelRejectsUnknownOrderAndForeignTrader) {
     book.rest(order(1, Side::Buy, 100, 5, /*trader=*/1), out);
     EXPECT_EQ(book.cancel(OrderId{99}, TraderId{1}, CancelReason::UserRequested, out).error(),

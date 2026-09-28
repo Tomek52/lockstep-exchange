@@ -67,6 +67,13 @@ private:
     [[nodiscard]] OrderBook* find_book(InstrumentId instrument) noexcept;
     [[nodiscard]] OrderId next_order_id() noexcept;
 
+    // True if (trader, client_order_id) is resting on any book this shard
+    // owns (RejectReason::DuplicateClientOrderId, task 003). Each OrderBook
+    // keeps its own exact index (inserted in rest(), erased in remove()), so
+    // this only ever asks; there is nothing here to keep in sync.
+    [[nodiscard]] bool is_duplicate_client_order(TraderId trader,
+                                                 ClientOrderId client_order_id) const noexcept;
+
     ShardId shard_;
     flat_map<InstrumentId, OrderBook> books_;
     RiskState risk_;
