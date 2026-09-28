@@ -107,6 +107,26 @@ seen most often:
 | Cross-process e2e smoke | wiring that only fails between processes | `scripts/e2e-smoke.sh` |
 | FeatureProbe | toolchain assumptions | `cmake/FeatureProbe.cmake` |
 
+## Agents and skills
+
+The loop above is encoded as Claude Code subagents (`.claude/agents/`) and
+skills (`.claude/skills/`), so every session plays the same roles the same
+way. Agents run in their own context; the reviewing ones cannot edit files.
+
+| Loop step | Agent | Can edit | Skill (slash command) |
+|---|---|---|---|
+| 1. Spec | `analyst` | `docs/` only | `/write-task-spec <description>` |
+| 1. Spec: a new decision | `architect` | `docs/` only | `/new-adr <title>` |
+| 2–3. Tests, implementation | `developer` | yes | `/implement-task <NNN>` drives steps 2–6 |
+| 4. Self-verification | `verifier` | no | `/definition-of-done` (`run-dod.sh`) |
+| 5. Review | `code-guard` | no | `/guard-review [PR \| branch]` |
+| 5. Review: concurrency | `concurrency-auditor` | no | added by `/guard-review` for threaded code |
+| PR upkeep | – | – | `steward`: CI job ↔ local command, known failure causes |
+
+Rules for changing them: an agent's instructions may only point to
+CLAUDE.md, ADRs and this document, never restate a rule differently. When a
+rule changes, change it at its source and check the agents still agree.
+
 ## Prompt template for executing a task
 
 ```text
