@@ -8,4 +8,5 @@ lockstep_add_test(lockstep_domain_tests
     order_book_test.cpp
     order_book_storage_test.cpp
     shard_engine_test.cpp
+    matching_test.cpp
   LINK lockstep::domain)

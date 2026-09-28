@@ -2,6 +2,7 @@
 
 #include <variant>
 
+#include "lockstep/domain/matching.hpp"
 #include "lockstep/domain/validation.hpp"
 
 namespace lockstep::domain {
@@ -49,10 +50,21 @@ CommandResult ShardEngine::on(const NewOrder& order, EventBuffer& out) {
     }
 
     const OrderId id = next_order_id();
-    out.push(OrderAccepted{id, order.trader, order.client_order_id, order.instrument, order.side,
-                           order.type, order.price, order.quantity});
-    // TODO(task-002): match against the opposite side, then rest the remainder
-    // (GTC limit) or cancel it (IOC / market). The skeleton only acknowledges.
+    const OrderAccepted accepted{id,         order.trader, order.client_order_id, order.instrument,
+                                 order.side, order.type,   order.price,           order.quantity};
+    out.push(accepted);
+
+    const Quantity remaining = match(*book, accepted, out);
+    if (remaining > Quantity{0}) {
+        if (order.type == OrderType::Limit && order.time_in_force == TimeInForce::Gtc) {
+            book->rest(RestingOrder{id, order.trader, order.client_order_id, order.side,
+                                    order.price, remaining},
+                       out);
+        } else {
+            out.push(OrderCancelled{id, order.trader, order.instrument, remaining,
+                                    CancelReason::ImmediateOrCancel});
+        }
+    }
     return CommandOutcome{id};
 }
 
@@ -80,8 +92,10 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& /*out*/) {
     if (resting->trader != modify.trader) {
         return std::unexpected(RejectReason::NotOrderOwner);
     }
-    // TODO(task-003): cancel/replace with priority rules. Unreachable in the
-    // skeleton because nothing rests on the book until task 002.
+    // TODO(task-003): cancel/replace with priority rules. Reachable now that
+    // task 002 rests orders; until task 003 lands, a modify by the order's
+    // owner is refused with UnknownOrder, a placeholder reason rather than a
+    // literally correct one.
     return std::unexpected(RejectReason::UnknownOrder);
 }
 
