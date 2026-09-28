@@ -361,6 +361,34 @@ TEST_F(ModifyTest, ClientIdIsReusableAfterTheOriginalOrderIsFullyFilled) {
     EXPECT_TRUE(reused.has_value());
 }
 
+TEST_F(ModifyTest, ClientIdIsReusableAfterAModifyCancelReplaceFullyFillsTheOrder) {
+    // The duplicate-id index is only ever written by on(NewOrder)'s rest();
+    // this exercises that a cancel/replace full fill (which never calls
+    // track_client_order) still frees the id, via is_duplicate_client_order's
+    // liveness check on the unchanged OrderId rather than a removal here.
+    const auto resting = engine.apply(
+        sequenced(limit_order(Side::Buy, 90, 5, TraderId{1}, ClientOrderId{7}), 1), out);
+    ASSERT_TRUE(resting.has_value());
+    const OrderId order_id = resting->order_id;
+    out.clear();
+
+    const auto maker =
+        engine.apply(sequenced(limit_order(Side::Sell, 100, 5, TraderId{2}), 2), out);
+    ASSERT_TRUE(maker.has_value());
+    out.clear();
+
+    // Modify to a crossing price: cancel/replace fully fills, so order_id
+    // never rests again.
+    const auto result = engine.apply(sequenced(modify(order_id, 100, 5), 3), out);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_EQ(engine.book(instrument)->find(order_id), nullptr);
+    out.clear();
+
+    const auto reused = engine.apply(
+        sequenced(limit_order(Side::Buy, 90, 5, TraderId{1}, ClientOrderId{7}), 4), out);
+    EXPECT_TRUE(reused.has_value());
+}
+
 TEST_F(ModifyTest, DuplicateClientIdCheckSpansEveryBookInTheShard) {
     constexpr InstrumentId other_instrument{10};
     ShardEngine multi_instrument_engine{ShardConfig{
