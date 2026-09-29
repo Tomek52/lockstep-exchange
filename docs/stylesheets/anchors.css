@@ -1,0 +1,49 @@
+/* Versioned anchors (ADR-0015), decorated by scripts/mkdocs_hooks.py. */
+
+/* Land below the sticky header instead of under it. */
+.md-typeset a.ls-anchor {
+  scroll-margin-top: calc(2.4rem + 1.2rem);
+}
+
+/* Criterion marker: a self-link that still reads as the bold marker. */
+.md-typeset a.ls-criterion,
+.md-typeset a.ls-criterion:hover {
+  color: inherit;
+}
+.md-typeset a.ls-criterion:hover strong {
+  text-decoration: underline;
+}
+
+/* Any other anchor: show its ID as a small label, like a criterion marker. */
+.md-typeset a.ls-anchor[data-label]::before {
+  content: "[" attr(data-label) "]";
+  display: inline-block;
+  margin-right: 0.4em;
+  padding: 0 0.35em;
+  border-radius: 0.2em;
+  font-family: var(--md-code-font-family);
+  font-size: 0.72em;
+  font-weight: normal;
+  line-height: 1.6;
+  vertical-align: 0.1em;
+  color: var(--md-default-fg-color--light);
+  background-color: var(--md-code-bg-color);
+}
+.md-typeset a.ls-anchor[data-label]:hover::before {
+  color: var(--md-accent-fg-color);
+}
+
+/* The item a link landed on: highlight it, so it is clear which one it is. */
+.md-typeset li:has(> a.ls-anchor:target),
+.md-typeset li:has(> p:first-child > a.ls-anchor:target),
+.md-typeset > p:has(> a.ls-anchor:target),
+.md-typeset :is(h2, h3, h4):has(> a.ls-anchor:target) {
+  background-color: var(--md-accent-fg-color--transparent);
+  box-shadow: -0.6em 0 0 0 var(--md-accent-fg-color);
+  border-radius: 0.1em;
+}
+
+/* The highlight above marks the target; the focus ring would cover the text. */
+.md-typeset a.ls-anchor:target {
+  outline: none;
+}

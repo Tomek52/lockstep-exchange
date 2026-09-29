@@ -10,6 +10,13 @@ rewrites such links before MkDocs validates them:
 - any other existing file or directory outside docs/ -> its GitHub URL;
 - a target that does not exist is left untouched, so `validation.links`
   reports it and `mkdocs build --strict` fails.
+
+It also makes versioned anchors visible on the site. In the sources an anchor
+is an empty `<a id="...">`, which gives a reader who followed a link nothing to
+see. Each one becomes a self-link: a criterion's `**[id vN]**` marker is
+wrapped in it, and any other anchor shows its ID as a small label
+(docs/stylesheets/anchors.css), so the target of a link can be identified and
+its URL copied.
 """
 
 from __future__ import annotations
@@ -29,6 +36,29 @@ ROOT_PAGES = {
 _LINK = re.compile(r"(\]\()(<[^>]+>|[^)\s]+)((?:\s+\"[^\"]*\")?\))")
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+_CODE_SPAN = re.compile(r"(`+).*?\1")
+_ANCHOR = re.compile(r'<a id="([a-z0-9-]+)-v(\d+)"></a>(\*\*\[[^\]]*\]\*\*)?')
+
+
+def _decorate_anchor(m: re.Match[str]) -> str:
+    anchor_id = f"{m.group(1)}-v{m.group(2)}"
+    label = f"{m.group(1)} v{m.group(2)}"
+    if m.group(3):  # Criterion: the visible marker becomes the self-link.
+        return (f'<a id="{anchor_id}" class="ls-anchor ls-criterion" href="#{anchor_id}" '
+                f'title="Link to this criterion">{m.group(3)}</a>')
+    return (f'<a id="{anchor_id}" class="ls-anchor" href="#{anchor_id}" '
+            f'data-label="{label}" aria-label="Anchor {label}" title="Link to this section"></a>')
+
+
+def _decorate_anchors(line: str) -> str:
+    """Decorates anchors outside `inline code` (examples of the syntax stay literal)."""
+    out, pos = [], 0
+    for code in _CODE_SPAN.finditer(line):
+        out.append(_ANCHOR.sub(_decorate_anchor, line[pos:code.start()]))
+        out.append(code.group(0))
+        pos = code.end()
+    out.append(_ANCHOR.sub(_decorate_anchor, line[pos:]))
+    return "".join(out)
 
 
 def _rewrite(target: str, page_dir: Path, docs_dir: Path, repo_root: Path,
@@ -74,5 +104,6 @@ def on_page_markdown(markdown: str, page, config, files) -> str:  # noqa: ANN001
                 + m.group(3),
                 line,
             )
+            line = _decorate_anchors(line)
         out.append(line)
     return "".join(out)

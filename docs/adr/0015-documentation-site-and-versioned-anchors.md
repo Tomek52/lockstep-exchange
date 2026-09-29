@@ -36,6 +36,11 @@ include-markdown rely on.
   build time: root documents to their site pages, existing code paths to
   GitHub URLs. A path that does not exist is left alone so the build fails.
 - Mermaid diagrams use Material's native `pymdownx.superfences` integration.
+- On the site, the hook turns every versioned anchor into a self-link: the
+  criterion marker becomes clickable, other anchors show their ID as a small
+  label, and the item a link lands on is highlighted
+  (`docs/stylesheets/anchors.css`). GitHub and editor previews show only the
+  source form.
 
 **Anchor IDs.** <a id="adr0015-anchor-id-format-v1"></a>A stable, versioned
 anchor marks every acceptance criterion and every other section someone links
