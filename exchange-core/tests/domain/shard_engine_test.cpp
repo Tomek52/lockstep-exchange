@@ -75,6 +75,7 @@ TEST_F(ShardEngineTest, CancelOfUnknownOrderIsRejected) {
     EXPECT_EQ(engine.apply(sequenced(cancel), out).error(), RejectReason::UnknownOrder);
 }
 
+// [utest->req~risk-controls.risk-commands-acknowledged-per-shard~1]
 TEST_F(ShardEngineTest, RiskCommandsAreAcknowledgedPerShard) {
     // InstrumentStatusChanged fires per book even with nothing resting to
     // cancel (task 004); risk_controls_test.cpp covers the rest.

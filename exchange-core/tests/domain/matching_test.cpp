@@ -59,6 +59,7 @@ protected:
     EventBuffer out;
 };
 
+// [utest->req~matching.non-crossing-limit-rests~1]
 TEST_F(MatchingTest, NonCrossingLimitRestsWithoutTrade) {
     const auto result = engine.apply(sequenced(limit_order(Side::Buy, 100, 5)), out);
 
@@ -73,6 +74,7 @@ TEST_F(MatchingTest, NonCrossingLimitRestsWithoutTrade) {
     EXPECT_EQ(engine.book(instrument)->best_price(Side::Buy), Price{100});
 }
 
+// [utest->req~matching.full-fill-against-one-order~1]
 TEST_F(MatchingTest, FullFillAgainstOneRestingOrderEmptiesTheBook) {
     const auto maker =
         engine.apply(sequenced(limit_order(Side::Sell, 100, 5, TraderId{1}), 1), out);
@@ -98,6 +100,7 @@ TEST_F(MatchingTest, FullFillAgainstOneRestingOrderEmptiesTheBook) {
     EXPECT_EQ(engine.book(instrument)->order_count(), 0U);
 }
 
+// [utest->req~matching.partial-fill-remainder-rests~1]
 TEST_F(MatchingTest, PartialFillRestsRemainderOnTheTakersSide) {
     const auto maker = engine.apply(sequenced(limit_order(Side::Sell, 100, 4), 1), out);
     ASSERT_TRUE(maker.has_value());
@@ -123,6 +126,7 @@ TEST_F(MatchingTest, PartialFillRestsRemainderOnTheTakersSide) {
     EXPECT_EQ(engine.book(instrument)->quantity_at(Side::Buy, Price{101}), Quantity{6});
 }
 
+// [utest->req~matching.sweep-levels-best-price-first~1]
 TEST_F(MatchingTest, SweepsMultipleLevelsBestPriceFirst) {
     // Distinct client order ids: the same trader rests three orders at once,
     // and reusing one while it is still resting is a DuplicateClientOrderId
@@ -173,6 +177,7 @@ TEST_F(MatchingTest, SweepsMultipleLevelsBestPriceFirst) {
     EXPECT_FALSE(engine.book(instrument)->best_price(Side::Buy).has_value());
 }
 
+// [utest->req~matching.fifo-within-level~1]
 TEST_F(MatchingTest, FifoWithinALevelFillsTheOldestOrderFirst) {
     const auto first =
         engine.apply(sequenced(limit_order(Side::Sell, 100, 3, TraderId{1}), 1), out);
@@ -207,6 +212,7 @@ TEST_F(MatchingTest, FifoWithinALevelFillsTheOldestOrderFirst) {
     EXPECT_EQ(second_untouched->remaining, Quantity{3});
 }
 
+// [utest->req~matching.price-improvement-at-maker-price~1]
 TEST_F(MatchingTest, TakerGetsPriceImprovementAtTheMakersPrice) {
     const auto maker = engine.apply(sequenced(limit_order(Side::Sell, 100, 5), 1), out);
     ASSERT_TRUE(maker.has_value());
@@ -231,6 +237,7 @@ TEST_F(MatchingTest, TakerGetsPriceImprovementAtTheMakersPrice) {
 // aggressor at an EQUAL price: a mutant that changes the sell branch's `>=`
 // to `>` would leave this passing bid unmatched (100 > 100 is false), so it
 // pins that operator specifically, not just "crossing happens".
+// [utest->req~matching.price-improvement-at-maker-price~1]
 TEST_F(MatchingTest, SellAggressorAtEqualPriceCrossesAndTradesAtTheBid) {
     const auto maker = engine.apply(sequenced(limit_order(Side::Buy, 100, 5), 1), out);
     ASSERT_TRUE(maker.has_value());
@@ -252,6 +259,7 @@ TEST_F(MatchingTest, SellAggressorAtEqualPriceCrossesAndTradesAtTheBid) {
     EXPECT_EQ(events_vector(out), expected);
 }
 
+// [utest->req~matching.market-order-on-empty-book-cancelled~1]
 TEST_F(MatchingTest, MarketOrderOnAnEmptyBookIsFullyCancelled) {
     const auto result = engine.apply(sequenced(market_order(Side::Buy, 7)), out);
 
@@ -272,6 +280,7 @@ TEST_F(MatchingTest, MarketOrderOnAnEmptyBookIsFullyCancelled) {
 // unfilled remainder is cancelled. A mutant that made market orders match
 // like a (price-capped) limit order would cross no ask at all, since a
 // market order carries Price{0}, and leave nothing traded here.
+// [utest->req~matching.sweep-levels-best-price-first~1]
 TEST_F(MatchingTest, MarketBuySweepsEveryRestingAskThenCancelsRemainder) {
     // Distinct client order ids: see the comment in
     // SweepsMultipleLevelsBestPriceFirst.
@@ -311,6 +320,7 @@ TEST_F(MatchingTest, MarketBuySweepsEveryRestingAskThenCancelsRemainder) {
 
 // Mirror of MarketBuySweepsEveryRestingAskThenCancelsRemainder for the sell
 // side, against resting bids.
+// [utest->req~matching.sweep-levels-best-price-first~1]
 TEST_F(MatchingTest, MarketSellSweepsEveryRestingBidThenCancelsRemainder) {
     // Distinct client order ids: see the comment in
     // SweepsMultipleLevelsBestPriceFirst.
@@ -349,6 +359,7 @@ TEST_F(MatchingTest, MarketSellSweepsEveryRestingBidThenCancelsRemainder) {
     EXPECT_FALSE(engine.book(instrument)->best_price(Side::Buy).has_value());
 }
 
+// [utest->req~matching.ioc-remainder-cancelled~1]
 TEST_F(MatchingTest, IocLimitRemainderIsCancelledNeverRested) {
     const auto maker = engine.apply(sequenced(limit_order(Side::Sell, 100, 3), 1), out);
     ASSERT_TRUE(maker.has_value());
@@ -440,6 +451,7 @@ RandomRunResult run_random_commands() {
     return result;
 }
 
+// [utest->req~matching.identical-commands-identical-events~1]
 TEST_F(MatchingTest, IdenticalCommandSequencesProduceIdenticalEvents) {
     // ADR-0004: apply() must be a pure function of the command sequence, so two
     // independent engines fed the same 1'000 commands must diverge nowhere.

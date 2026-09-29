@@ -52,6 +52,7 @@ protected:
 // --- Criterion 1: a blocked trader's new order is rejected; other traders
 // are unaffected. ------------------------------------------------------
 
+// [utest->req~risk-controls.blocked-trader-new-order-rejected~1]
 TEST_F(RiskControlsTest, BlockedTraderNewOrderIsRejectedOtherTraderUnaffected) {
     ASSERT_TRUE(engine.apply(sequenced(BlockTrader{RiskCommandId{1}, trader_a}), out).has_value());
     out.clear();
@@ -79,6 +80,7 @@ TEST_F(RiskControlsTest, BlockedTraderNewOrderIsRejectedOtherTraderUnaffected) {
 // both sides and across instruments, in the documented order (per book,
 // cancel_if's price-time order; then the ack). --------------------------
 
+// [utest->req~risk-controls.block-cancels-traders-resting-orders~1]
 TEST_F(RiskControlsTest, BlockCancelsOnlyThatTradersRestingOrdersAcrossBooksAndSides) {
     // trader_a: resting on both sides of instrument_a, and on instrument_b.
     // trader_b: resting orders that must survive.
@@ -137,6 +139,7 @@ TEST_F(RiskControlsTest, BlockCancelsOnlyThatTradersRestingOrdersAcrossBooksAndS
 
 // --- Criterion 3: after unblock, new orders are accepted again. --------
 
+// [utest->req~risk-controls.unblock-accepts-new-orders~1]
 TEST_F(RiskControlsTest, UnblockAllowsNewOrdersAgain) {
     ASSERT_TRUE(engine.apply(sequenced(BlockTrader{RiskCommandId{1}, trader_a}), out).has_value());
     out.clear();
@@ -154,6 +157,7 @@ TEST_F(RiskControlsTest, UnblockAllowsNewOrdersAgain) {
 // --- Criterion 4: kill switch on cancels every resting order, halts every
 // instrument, rejects new orders; cancel still works; off resumes. -------
 
+// [utest->req~risk-controls.kill-switch-cancels-halts-and-resumes~1]
 TEST_F(RiskControlsTest, KillSwitchOnCancelsHaltsAndRejectsNewOrdersCancelStillWorks) {
     ASSERT_TRUE(
         engine
@@ -225,6 +229,7 @@ TEST_F(RiskControlsTest, KillSwitchOnCancelsHaltsAndRejectsNewOrdersCancelStillW
 // accepts once connected, rejects again after link-down. FailOpen always
 // accepts, ignoring the link entirely. -----------------------------------
 
+// [utest->req~risk-controls.fail-closed-gates-on-link-status~1]
 TEST_F(RiskControlsTest, FailClosedGatesOnLinkStatusFailOpenIgnoresIt) {
     ShardEngine fail_closed{ShardConfig{.shard = ShardId{6},
                                         .instruments = {{.id = instrument_a}},
@@ -337,6 +342,7 @@ TEST_F(RiskControlsTest, CheckPrecedenceHaltedBeatsBlockedBeatsLinkDown) {
 // --- Criterion 6: duplicate BlockTrader with the SAME id changes nothing
 // but still acks (only RiskCommandApplied on the redundant application). ---
 
+// [utest->req~risk-controls.duplicate-block-trader-only-acks~1]
 TEST_F(RiskControlsTest, DuplicateBlockTraderStillAcksButChangesNothing) {
     ASSERT_TRUE(
         engine
@@ -509,6 +515,7 @@ TEST_F(RiskControlsTest, FailClosedCancelStillWorksWithLinkDown) {
 // risk-driven cancel paths: once cancel_if removes an order, its
 // (trader, client_order_id) is free again. ------------------------------
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(RiskControlsTest, ClientOrderIdIsReusableAfterBlockCancelsTheOrder) {
     ASSERT_TRUE(
         engine
@@ -531,6 +538,7 @@ TEST_F(RiskControlsTest, ClientOrderIdIsReusableAfterBlockCancelsTheOrder) {
     EXPECT_TRUE(reused.has_value());
 }
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(RiskControlsTest, ClientOrderIdIsReusableAfterKillSwitchCancelsTheOrder) {
     ASSERT_TRUE(
         engine

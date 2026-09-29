@@ -194,6 +194,7 @@ private:
     BidLevels bids_;
     AskLevels asks_;
     OrderPool pool_;
+    // [impl->dsn~deterministic-replay.no-hidden-nondeterminism-in-domain~1]
     // Makes find() and cancel() O(1). Hash order is unspecified, so this map
     // is only ever looked up, never iterated (ADR-0004).
     std::unordered_map<OrderId, Index, StrongIntHash> slot_by_id_;
@@ -205,6 +206,7 @@ private:
     std::unordered_set<ClientOrderKey, ClientOrderKeyHash> client_order_ids_;
 };
 
+// [impl->req~order-book-storage.cancel-if-by-trader~1]
 template <std::predicate<const RestingOrder&> Pred>
 std::size_t OrderBook::cancel_if(Pred predicate, CancelReason reason, EventBuffer& out) {
     std::size_t cancelled = 0;

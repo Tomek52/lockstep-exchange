@@ -32,6 +32,7 @@ TEST_F(OrderBookStorageTest, FrontIsNullOnEmptySide) {
     EXPECT_EQ(book.front(Side::Sell), nullptr);
 }
 
+// [utest->req~order-book-storage.cancel-middle-preserves-fifo~1]
 TEST_F(OrderBookStorageTest, CancellingMiddleOrderPreservesFifoOfTheOthers) {
     book.rest(order(1, Side::Sell, 105, 3), out);
     book.rest(order(2, Side::Sell, 105, 4), out);
@@ -54,6 +55,7 @@ TEST_F(OrderBookStorageTest, CancellingMiddleOrderPreservesFifoOfTheOthers) {
     EXPECT_EQ(book.order_count(), 0U);
 }
 
+// [utest->req~order-book-storage.find-among-many-orders~1]
 TEST_F(OrderBookStorageTest, FindLocatesEachOfTenThousandOrdersOverManyLevels) {
     constexpr std::uint64_t levels_per_side = 100;
     constexpr std::uint64_t orders_per_level = 50;
@@ -92,6 +94,7 @@ TEST_F(OrderBookStorageTest, FindLocatesEachOfTenThousandOrdersOverManyLevels) {
     EXPECT_EQ(book.find(OrderId{next_id}), nullptr);
 }
 
+// [utest->req~order-book-storage.reduce-front-partial~1]
 TEST_F(OrderBookStorageTest, ReduceFrontPartialDecreasesOrderAndLevel) {
     book.rest(order(1, Side::Buy, 100, 10), out);
     book.rest(order(2, Side::Buy, 100, 5), out);
@@ -112,6 +115,7 @@ TEST_F(OrderBookStorageTest, ReduceFrontPartialDecreasesOrderAndLevel) {
               (BookLevelChanged{instrument, Side::Buy, Price{100}, Quantity{11}}));
 }
 
+// [utest->req~order-book-storage.reduce-front-full~1]
 TEST_F(OrderBookStorageTest, ReduceFrontFullRemovesOrderThenLevel) {
     book.rest(order(1, Side::Sell, 105, 3), out);
     book.rest(order(2, Side::Sell, 105, 4), out);
@@ -142,6 +146,7 @@ TEST_F(OrderBookStorageTest, ReduceFrontFullRemovesOrderThenLevel) {
               (BookLevelChanged{instrument, Side::Sell, Price{105}, Quantity{0}}));
 }
 
+// [utest->req~order-book-storage.cancel-if-by-trader~1]
 TEST_F(OrderBookStorageTest, CancelIfByTraderRemovesMatchesInDocumentedOrder) {
     constexpr TraderId victim{7};
     // Rest in an order that differs from the documented output order, so the
@@ -188,6 +193,7 @@ TEST_F(OrderBookStorageTest, CancelIfByTraderRemovesMatchesInDocumentedOrder) {
     EXPECT_EQ(snap.asks[0], (LevelView{Price{105}, Quantity{7}, 1}));
 }
 
+// [utest->req~order-book-storage.cancel-if-by-trader~1]
 TEST_F(OrderBookStorageTest, CancelIfMatchingNothingEmitsNothing) {
     book.rest(order(1, Side::Buy, 100, 1, 1), out);
     out.clear();
@@ -198,6 +204,7 @@ TEST_F(OrderBookStorageTest, CancelIfMatchingNothingEmitsNothing) {
     EXPECT_EQ(book.order_count(), 1U);
 }
 
+// [utest->req~order-book-storage.pool-slots-reused~1]
 TEST_F(OrderBookStorageTest, SlotsAreReusedAfterCancel) {
     constexpr std::uint64_t orders_per_round = 1'000;
     constexpr int rounds = 10;

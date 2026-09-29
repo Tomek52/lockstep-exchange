@@ -44,6 +44,7 @@ BookSnapshot OrderBook::snapshot() const {
     return BookSnapshot{spec_.id, aggregate(bids_), aggregate(asks_)};
 }
 
+// [impl->req~order-book-storage.find-among-many-orders~1]
 const RestingOrder* OrderBook::find(OrderId id) const noexcept {
     const auto it = slot_by_id_.find(id);
     return it == slot_by_id_.end() ? nullptr : &pool_.node(it->second).order;
@@ -90,6 +91,8 @@ void OrderBook::rest(const RestingOrder& order, EventBuffer& out) {
     });
 }
 
+// [impl->req~order-book-storage.reduce-front-partial~1]
+// [impl->req~order-book-storage.reduce-front-full~1]
 void OrderBook::reduce_front(Side side, Quantity quantity, EventBuffer& out) {
     with_side(side, [&](auto& levels) {
         assert(!levels.empty() && "reduce_front on an empty side");
@@ -110,6 +113,7 @@ void OrderBook::reduce_front(Side side, Quantity quantity, EventBuffer& out) {
     });
 }
 
+// [impl->req~modify.reduce-keeps-priority~1]
 void OrderBook::reduce(OrderId id, Quantity quantity, EventBuffer& out) {
     const auto found = slot_by_id_.find(id);
     assert(found != slot_by_id_.end() && "reduce of an order that is not resting");
@@ -174,6 +178,7 @@ std::expected<Quantity, RejectReason> OrderBook::cancel(OrderId id,
     return order.remaining;
 }
 
+// [impl->req~order-book-storage.cancel-middle-preserves-fifo~1]
 void OrderBook::remove(Level& level, Index slot) noexcept {
     const OrderPool::Node& node = pool_.node(slot);
     if (node.prev == OrderPool::npos) {

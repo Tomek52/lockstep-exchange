@@ -4,6 +4,8 @@
 
 namespace lockstep::domain {
 
+// [impl->req~risk-controls.blocked-trader-new-order-rejected~1]
+// [impl->dsn~risk-loop.link-status-policy~1]
 std::expected<void, RejectReason> RiskState::check_new_order(TraderId trader) const noexcept {
     if (halted_) {
         return std::unexpected(RejectReason::TradingHalted);
@@ -17,6 +19,7 @@ std::expected<void, RejectReason> RiskState::check_new_order(TraderId trader) co
     return {};
 }
 
+// [impl->req~risk-controls.blocked-trader-new-order-rejected~1]
 void RiskState::block(TraderId trader) {
     const auto it = std::ranges::lower_bound(blocked_, trader);
     if (it == blocked_.end() || *it != trader) {
@@ -24,6 +27,7 @@ void RiskState::block(TraderId trader) {
     }
 }
 
+// [impl->req~risk-controls.unblock-accepts-new-orders~1]
 void RiskState::unblock(TraderId trader) {
     const auto it = std::ranges::lower_bound(blocked_, trader);
     if (it != blocked_.end() && *it == trader) {

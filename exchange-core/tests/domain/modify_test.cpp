@@ -50,6 +50,7 @@ protected:
     EventBuffer out;
 };
 
+// [utest->req~modify.reduce-keeps-priority~1]
 TEST_F(ModifyTest, ReducingQuantityAtSamePriceKeepsPriorityOnBuy) {
     const auto first = engine.apply(sequenced(limit_order(Side::Buy, 100, 10), 1), out);
     ASSERT_TRUE(first.has_value());
@@ -81,6 +82,7 @@ TEST_F(ModifyTest, ReducingQuantityAtSamePriceKeepsPriorityOnBuy) {
     EXPECT_EQ(second_untouched->remaining, Quantity{5});
 }
 
+// [utest->req~modify.reduce-keeps-priority~1]
 TEST_F(ModifyTest, ReducingQuantityAtSamePriceKeepsPriorityOnSell) {
     const auto first = engine.apply(sequenced(limit_order(Side::Sell, 100, 10), 1), out);
     ASSERT_TRUE(first.has_value());
@@ -123,6 +125,7 @@ TEST_F(ModifyTest, SameQuantityAtSamePriceIsANoOp) {
     EXPECT_EQ(engine.book(instrument)->find(first_id)->remaining, Quantity{10});
 }
 
+// [utest->req~modify.increase-loses-priority~1]
 TEST_F(ModifyTest, IncreasingQuantityAtSamePriceLosesPriorityOnBuy) {
     const auto first = engine.apply(sequenced(limit_order(Side::Buy, 100, 5), 1), out);
     ASSERT_TRUE(first.has_value());
@@ -155,6 +158,7 @@ TEST_F(ModifyTest, IncreasingQuantityAtSamePriceLosesPriorityOnBuy) {
     EXPECT_EQ(moved->remaining, Quantity{8});
 }
 
+// [utest->req~modify.increase-loses-priority~1]
 TEST_F(ModifyTest, IncreasingQuantityAtSamePriceLosesPriorityOnSell) {
     const auto first = engine.apply(sequenced(limit_order(Side::Sell, 100, 5), 1), out);
     ASSERT_TRUE(first.has_value());
@@ -181,6 +185,7 @@ TEST_F(ModifyTest, IncreasingQuantityAtSamePriceLosesPriorityOnSell) {
     EXPECT_EQ(front->id, second_id);
 }
 
+// [utest->req~modify.crossing-price-change-trades-with-same-id~1]
 TEST_F(ModifyTest, PriceChangeToACrossingPriceTradesImmediatelyOnBuy) {
     const auto maker =
         engine.apply(sequenced(limit_order(Side::Sell, 100, 5, TraderId{2}), 1), out);
@@ -208,6 +213,7 @@ TEST_F(ModifyTest, PriceChangeToACrossingPriceTradesImmediatelyOnBuy) {
     EXPECT_FALSE(engine.book(instrument)->best_price(Side::Sell).has_value());
 }
 
+// [utest->req~modify.crossing-price-change-trades-with-same-id~1]
 TEST_F(ModifyTest, PriceChangeToACrossingPriceTradesImmediatelyOnSell) {
     const auto maker = engine.apply(sequenced(limit_order(Side::Buy, 100, 5, TraderId{2}), 1), out);
     ASSERT_TRUE(maker.has_value());
@@ -231,6 +237,7 @@ TEST_F(ModifyTest, PriceChangeToACrossingPriceTradesImmediatelyOnSell) {
     EXPECT_EQ(events_vector(out), expected);
 }
 
+// [utest->req~modify.crossing-price-change-trades-with-same-id~1]
 TEST_F(ModifyTest, PartialFillOnReplaceRestsTheRemainderAtTheNewPrice) {
     const auto maker =
         engine.apply(sequenced(limit_order(Side::Sell, 100, 3, TraderId{2}), 1), out);
@@ -335,6 +342,7 @@ TEST_F(ModifyTest, PriceChangeWithSmallerQuantityNonCrossingLosesPriorityOnSell)
     EXPECT_EQ(moved_order->remaining, Quantity{6});
 }
 
+// [utest->req~modify.non-owner-rejected~1]
 TEST_F(ModifyTest, ModifyByNonOwnerIsRejectedAndLeavesTheBookUnchanged) {
     const auto first = engine.apply(sequenced(limit_order(Side::Buy, 100, 10), 1), out);
     ASSERT_TRUE(first.has_value());
@@ -351,6 +359,7 @@ TEST_F(ModifyTest, ModifyByNonOwnerIsRejectedAndLeavesTheBookUnchanged) {
     EXPECT_EQ(unchanged->remaining, Quantity{10});
 }
 
+// [utest->req~modify.unknown-or-invalid-modify-rejected~1]
 TEST_F(ModifyTest, ModifyOfAnUnknownOrderIsRejected) {
     const auto result = engine.apply(sequenced(modify(OrderId{99999}, 100, 5)), out);
 
@@ -359,6 +368,7 @@ TEST_F(ModifyTest, ModifyOfAnUnknownOrderIsRejected) {
     EXPECT_TRUE(out.empty());
 }
 
+// [utest->req~modify.unknown-or-invalid-modify-rejected~1]
 TEST_F(ModifyTest, ModifyWithInvalidPriceIsRejected) {
     const auto first = engine.apply(sequenced(limit_order(Side::Buy, 100, 10), 1), out);
     ASSERT_TRUE(first.has_value());
@@ -372,6 +382,7 @@ TEST_F(ModifyTest, ModifyWithInvalidPriceIsRejected) {
     EXPECT_TRUE(out.empty());
 }
 
+// [utest->req~modify.unknown-or-invalid-modify-rejected~1]
 TEST_F(ModifyTest, ModifyWithInvalidQuantityIsRejected) {
     const auto first = engine.apply(sequenced(limit_order(Side::Buy, 100, 10), 1), out);
     ASSERT_TRUE(first.has_value());
@@ -385,6 +396,7 @@ TEST_F(ModifyTest, ModifyWithInvalidQuantityIsRejected) {
     EXPECT_TRUE(out.empty());
 }
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(ModifyTest, NewOrderWithDuplicateClientIdWhileRestingIsRejected) {
     const auto first = engine.apply(
         sequenced(limit_order(Side::Buy, 100, 5, TraderId{1}, ClientOrderId{7}), 1), out);
@@ -403,6 +415,7 @@ TEST_F(ModifyTest, NewOrderWithDuplicateClientIdWhileRestingIsRejected) {
     EXPECT_TRUE(other_trader.has_value());
 }
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(ModifyTest, DuplicateClientIdStillRejectedAfterModifyMovesTheOrder) {
     // Regression for task-003 review: a cancel/replace modify keeps the same
     // OrderId and client_order_id, so the id must still read as in-use after
@@ -425,6 +438,7 @@ TEST_F(ModifyTest, DuplicateClientIdStillRejectedAfterModifyMovesTheOrder) {
     EXPECT_EQ(duplicate.error(), RejectReason::DuplicateClientOrderId);
 }
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(ModifyTest, DuplicateClientIdIsRejectedOnEveryResubmission) {
     // Regression for task-003 review: a rejected NewOrder must not disturb
     // the index, or a rejected duplicate could free the very id it collided
@@ -445,6 +459,7 @@ TEST_F(ModifyTest, DuplicateClientIdIsRejectedOnEveryResubmission) {
     EXPECT_EQ(duplicate_twice.error(), RejectReason::DuplicateClientOrderId);
 }
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(ModifyTest, ClientIdIsReusableAfterTheOriginalOrderIsCancelled) {
     const auto first = engine.apply(
         sequenced(limit_order(Side::Buy, 100, 5, TraderId{1}, ClientOrderId{7}), 1), out);
@@ -462,6 +477,7 @@ TEST_F(ModifyTest, ClientIdIsReusableAfterTheOriginalOrderIsCancelled) {
     EXPECT_TRUE(reused.has_value());
 }
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(ModifyTest, ClientIdIsReusableAfterTheOriginalOrderIsFullyFilled) {
     const auto resting = engine.apply(
         sequenced(limit_order(Side::Sell, 100, 5, TraderId{1}, ClientOrderId{7}), 1), out);
@@ -477,6 +493,7 @@ TEST_F(ModifyTest, ClientIdIsReusableAfterTheOriginalOrderIsFullyFilled) {
     EXPECT_TRUE(reused.has_value());
 }
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(ModifyTest, ClientIdIsReusableAfterAModifyCancelReplaceFullyFillsTheOrder) {
     // The duplicate-id index is only ever written by on(NewOrder)'s rest();
     // this exercises that a cancel/replace full fill (which never calls
@@ -505,6 +522,7 @@ TEST_F(ModifyTest, ClientIdIsReusableAfterAModifyCancelReplaceFullyFillsTheOrder
     EXPECT_TRUE(reused.has_value());
 }
 
+// [utest->req~modify.duplicate-client-id-rejected-while-resting~1]
 TEST_F(ModifyTest, DuplicateClientIdCheckSpansEveryBookInTheShard) {
     constexpr InstrumentId other_instrument{10};
     ShardEngine multi_instrument_engine{ShardConfig{

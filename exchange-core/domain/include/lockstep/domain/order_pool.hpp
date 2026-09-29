@@ -42,6 +42,7 @@ public:
         Index next{npos};
     };
 
+    // [impl->req~order-book-storage.pool-slots-reused~1]
     /// Stores `order` in a free slot (reusing one if available) with no links.
     [[nodiscard]] Index acquire(const RestingOrder& order) {
         if (free_head_ != npos) {

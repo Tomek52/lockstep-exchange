@@ -21,12 +21,14 @@ protected:
     EventBuffer out;
 };
 
+// [utest->req~order-book-storage.existing-book-tests-pass-unmodified~1]
 TEST_F(OrderBookTest, EmptyBookHasNoBestPrice) {
     EXPECT_FALSE(book.best_price(Side::Buy).has_value());
     EXPECT_FALSE(book.best_price(Side::Sell).has_value());
     EXPECT_EQ(book.order_count(), 0U);
 }
 
+// [utest->req~order-book-storage.existing-book-tests-pass-unmodified~1]
 TEST_F(OrderBookTest, BestBidIsHighestAndBestAskIsLowest) {
     book.rest(order(1, Side::Buy, 100, 5), out);
     book.rest(order(2, Side::Buy, 102, 5), out);
@@ -37,6 +39,7 @@ TEST_F(OrderBookTest, BestBidIsHighestAndBestAskIsLowest) {
     EXPECT_EQ(book.best_price(Side::Sell), Price{105});
 }
 
+// [utest->req~order-book-storage.existing-book-tests-pass-unmodified~1]
 TEST_F(OrderBookTest, RestingAggregatesLevelAndEmitsLevelUpdate) {
     book.rest(order(1, Side::Buy, 100, 5), out);
     book.rest(order(2, Side::Buy, 100, 7), out);
@@ -48,6 +51,7 @@ TEST_F(OrderBookTest, RestingAggregatesLevelAndEmitsLevelUpdate) {
     EXPECT_EQ(last.side, Side::Buy);
 }
 
+// [utest->req~order-book-storage.existing-book-tests-pass-unmodified~1]
 TEST_F(OrderBookTest, SnapshotListsBestLevelsFirst) {
     book.rest(order(1, Side::Buy, 100, 5), out);
     book.rest(order(2, Side::Buy, 101, 1), out);
@@ -63,6 +67,7 @@ TEST_F(OrderBookTest, SnapshotListsBestLevelsFirst) {
     EXPECT_EQ(snap.asks[0], (LevelView{Price{103}, Quantity{4}, 1}));
 }
 
+// [utest->req~order-book-storage.existing-book-tests-pass-unmodified~1]
 TEST_F(OrderBookTest, CancelRemovesOrderAndEmptyLevel) {
     book.rest(order(1, Side::Sell, 105, 5), out);
     out.clear();
@@ -78,6 +83,7 @@ TEST_F(OrderBookTest, CancelRemovesOrderAndEmptyLevel) {
     EXPECT_EQ(std::get<BookLevelChanged>(out.events()[1]).quantity, Quantity{0});
 }
 
+// [utest->req~order-book-storage.existing-book-tests-pass-unmodified~1]
 TEST_F(OrderBookTest, ClientOrderIndexTracksRestingOrdersExactlyNotCumulatively) {
     // Regression for task-003 review: the duplicate-client-id index must stay
     // in sync with what is actually resting, not just grow whenever a new
@@ -100,6 +106,7 @@ TEST_F(OrderBookTest, ClientOrderIndexTracksRestingOrdersExactlyNotCumulatively)
     EXPECT_EQ(book.client_order_index_size(), 0U);
 }
 
+// [utest->req~order-book-storage.existing-book-tests-pass-unmodified~1]
 TEST_F(OrderBookTest, CancelRejectsUnknownOrderAndForeignTrader) {
     book.rest(order(1, Side::Buy, 100, 5, /*trader=*/1), out);
     EXPECT_EQ(book.cancel(OrderId{99}, TraderId{1}, CancelReason::UserRequested, out).error(),

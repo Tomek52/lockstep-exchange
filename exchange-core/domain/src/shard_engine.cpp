@@ -35,11 +35,13 @@ OrderBook* ShardEngine::find_book(InstrumentId instrument) noexcept {
     return it == books_.end() ? nullptr : &it->second;
 }
 
+// [impl->dsn~deterministic-replay.no-hidden-nondeterminism-in-domain~1]
 OrderId ShardEngine::next_order_id() noexcept {
     ++order_counter_;
     return OrderId{(std::uint64_t{shard_.value()} << order_id_shard_shift) | order_counter_};
 }
 
+// [impl->req~modify.duplicate-client-id-rejected-while-resting~1]
 bool ShardEngine::is_duplicate_client_order(TraderId trader,
                                             ClientOrderId client_order_id) const noexcept {
     // A boolean answer does not depend on visiting order (ADR-0004: nothing
@@ -51,6 +53,10 @@ bool ShardEngine::is_duplicate_client_order(TraderId trader,
     });
 }
 
+// [impl->req~matching.non-crossing-limit-rests~1]
+// [impl->req~matching.partial-fill-remainder-rests~1]
+// [impl->req~matching.market-order-on-empty-book-cancelled~1]
+// [impl->req~matching.ioc-remainder-cancelled~1]
 CommandResult ShardEngine::on(const NewOrder& order, EventBuffer& out) {
     OrderBook* book = find_book(order.instrument);
     if (book == nullptr) {
@@ -110,6 +116,8 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& out) {
         !ok) {
         return std::unexpected(ok.error());
     }
+    // [impl->req~modify.unknown-or-invalid-modify-rejected~1]
+    // [impl->req~modify.non-owner-rejected~1]
     const RestingOrder* resting = book->find(modify.order_id);
     if (resting == nullptr) {
         return std::unexpected(RejectReason::UnknownOrder);
@@ -118,6 +126,7 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& out) {
         return std::unexpected(RejectReason::NotOrderOwner);
     }
 
+    // [impl->req~modify.reduce-keeps-priority~1]
     // Same price and a smaller (or unchanged) quantity: shrink in place and
     // keep the order's queue position (domain-model.md "Matching rules").
     if (modify.new_price == resting->price && modify.new_quantity <= resting->remaining) {
@@ -129,6 +138,8 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& out) {
         return CommandOutcome{modify.order_id};
     }
 
+    // [impl->req~modify.increase-loses-priority~1]
+    // [impl->req~modify.crossing-price-change-trades-with-same-id~1]
     // Price change, or a larger quantity: cancel/replace. The order loses its
     // queue position and re-enters as a new incoming order with the same
     // OrderId, so it may trade before whatever remains rests at the tail.
@@ -154,6 +165,9 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& out) {
     return CommandOutcome{modify.order_id};
 }
 
+// [impl->req~risk-controls.block-cancels-traders-resting-orders~1]
+// [impl->dsn~risk-loop.idempotent-risk-commands~1]
+// [impl->dsn~risk-loop.risk-commands-acknowledged-per-shard~1]
 CommandResult ShardEngine::on(const BlockTrader& block, EventBuffer& out) {
     risk_.block(block.trader);
     // books_ is a flat_map, so this walks instruments in id order
@@ -170,12 +184,16 @@ CommandResult ShardEngine::on(const BlockTrader& block, EventBuffer& out) {
     return CommandOutcome{};
 }
 
+// [impl->dsn~risk-loop.risk-commands-acknowledged-per-shard~1]
 CommandResult ShardEngine::on(const UnblockTrader& unblock, EventBuffer& out) {
     risk_.unblock(unblock.trader);
     out.push(RiskCommandApplied{unblock.command_id});
     return CommandOutcome{};
 }
 
+// [impl->req~risk-controls.kill-switch-cancels-halts-and-resumes~1]
+// [impl->dsn~risk-loop.idempotent-risk-commands~1]
+// [impl->dsn~risk-loop.risk-commands-acknowledged-per-shard~1]
 CommandResult ShardEngine::on(const KillSwitch& kill, EventBuffer& out) {
     // Unlike BlockTrader, cancel_if alone would not make a redundant engage
     // a no-op: with nothing left to cancel it would still emit
@@ -199,6 +217,7 @@ CommandResult ShardEngine::on(const KillSwitch& kill, EventBuffer& out) {
     return CommandOutcome{};
 }
 
+// [impl->dsn~risk-loop.link-status-policy~1]
 CommandResult ShardEngine::on(const RiskLinkStatus& status, EventBuffer& /*out*/) {
     risk_.set_link_connected(status.connected);
     return CommandOutcome{};

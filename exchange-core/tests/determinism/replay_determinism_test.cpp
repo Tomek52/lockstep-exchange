@@ -59,6 +59,7 @@ Command random_command(std::mt19937_64& rng) {
                     .quantity = Quantity{qty(rng)}};
 }
 
+// [itest->req~modify.determinism-test-still-passes~1]
 TEST(ReplayDeterminism, JournalReplayReproducesLiveOutputPerShard) {
     app::ManualClock clock;
     test::MemoryJournals journals;

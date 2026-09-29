@@ -19,6 +19,11 @@ namespace {
 
 }  // namespace
 
+// [impl->req~matching.full-fill-against-one-order~1]
+// [impl->req~matching.partial-fill-remainder-rests~1]
+// [impl->req~matching.sweep-levels-best-price-first~1]
+// [impl->req~matching.fifo-within-level~1]
+// [impl->req~matching.price-improvement-at-maker-price~1]
 Quantity match(OrderBook& book, const OrderAccepted& incoming, EventBuffer& out) {
     const Side maker_side = opposite(incoming.side);
     Quantity remaining = incoming.quantity;
