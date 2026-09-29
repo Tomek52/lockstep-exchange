@@ -125,6 +125,7 @@ rule of the analyst and architect.
 | 5. Review | `code-guard` | Opus 5.5 | no | `/guard-review [PR \| branch]` |
 | 5. Review: concurrency | `concurrency-auditor` | Opus 5.5 | no | added by `/guard-review` for threaded code |
 | PR upkeep | – | – | – | `steward`: CI job ↔ local command, known failure causes |
+| Docs: a versioned anchor was bumped | – | – | yes | `/docs-sync [base]` (`.claude/commands/`): re-checks every reference to the changed item ([ADR-0015](adr/0015-documentation-site-and-versioned-anchors.md#adr0015-version-bump-rule-v1)) |
 
 Models: Opus 5.5 where the work is judgment (writing a spec, weighing a
 decision, finding what is wrong in plausible code); Sonnet 5 where it is
