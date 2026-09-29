@@ -24,13 +24,21 @@ public:
 
     /// Pre-trade gate for NewOrder / ModifyOrder. Checks, in order: halted
     /// (TradingHalted), trader blocked (TraderBlocked), then, only under
-    /// FailClosed, the link being down (RiskUnavailable). See
-    /// docs/tasks/004-risk-controls-in-domain.md for why this order.
+    /// FailClosed, the link being down (RiskUnavailable). Broadest stop
+    /// first: an exchange-wide halt outranks a single trader's block, and a
+    /// block is about that trader specifically, not the sentinel link, so it
+    /// outranks link-down too (docs/tasks/004-risk-controls-in-domain.md).
     [[nodiscard]] std::expected<void, RejectReason> check_new_order(TraderId trader) const noexcept;
 
+    /// Idempotent: blocking an already-blocked trader is a no-op. May
+    /// allocate (grows the sorted blocked-trader set).
     void block(TraderId trader);
+    /// Idempotent: unblocking a trader that is not blocked is a no-op.
     void unblock(TraderId trader);
+    /// Idempotent: engaging an already-engaged (or disengaging an
+    /// already-disengaged) kill switch is a no-op.
     void set_kill_switch(bool engaged) noexcept;
+    /// Idempotent: setting the link to its current state is a no-op.
     void set_link_connected(bool connected) noexcept;
 
     [[nodiscard]] bool is_blocked(TraderId trader) const noexcept;
@@ -40,9 +48,10 @@ public:
 private:
     RiskLinkPolicy policy_;
     bool halted_{false};
-    // The link starts down (ADR-0013): under FailClosed, orders are rejected
-    // until the shard applies the first RiskLinkStatus{true}, so replay
-    // reproduces exactly which early orders were refused.
+    // The link starts down (docs/tasks/004-risk-controls-in-domain.md):
+    // under FailClosed, orders are rejected until the shard applies the
+    // first RiskLinkStatus{true}, so replay reproduces exactly which early
+    // orders were refused.
     bool link_connected_{false};
     // Sorted, never iterated (ADR-0004): membership is a binary search.
     // ShardEngine cancels a blocked trader's resting orders by asking each

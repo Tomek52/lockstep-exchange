@@ -24,6 +24,11 @@ Persist every shard's commands to disk in the format of
   `ctest -L architecture`.
 - Commands: `exchange-core/domain/include/lockstep/domain/commands.hpp`. Use
   `CommandTag`, never `variant::index()`.
+- **Note (task 004):** `RiskLinkPolicy` (FailOpen/FailClosed) changes
+  `ShardEngine`'s output, not just its `InstrumentSpec`s, so `config_hash`
+  must also cover the shard's `RiskLinkPolicy`; otherwise replaying a
+  journal under a different policy than it was recorded with diverges
+  silently (ADR-0004, ADR-0012).
 
 ## Interfaces to implement
 
