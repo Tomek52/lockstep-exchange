@@ -46,7 +46,8 @@ replay reproduces it.
 | `RiskLinkStatus{c}` | set link | none |
 
 Idempotency: blocking an already-blocked trader or engaging an engaged kill
-switch changes nothing and still emits `RiskCommandApplied`.
+switch changes nothing and still emits `RiskCommandApplied`. A redundant
+disengage (kill switch already off) likewise emits only `RiskCommandApplied`.
 
 `ModifyOrder` is also gated by `check_new_order`. `CancelOrder` is always
 allowed, even when halted.
@@ -67,8 +68,8 @@ Tests in `exchange-core/tests/domain/risk_controls_test.cpp`:
    always accepted.
 6. Duplicate `BlockTrader` with the same id: second application changes
    nothing, but still acks.
-7. The existing test
-   `ShardEngineTest.RiskCommandsAreAcknowledgedPerShard` still passes.
+7. The existing test `ShardEngineTest.RiskCommandsAreAcknowledgedPerShard`
+   still passes, updated to the full event vector.
 8. The `NOLINTBEGIN/END` block in `risk_state.cpp` is gone; clang-tidy is clean.
 9. Presets debug, asan-ubsan and tsan pass.
 
