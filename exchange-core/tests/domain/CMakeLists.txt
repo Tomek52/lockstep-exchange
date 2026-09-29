@@ -10,4 +10,5 @@ lockstep_add_test(lockstep_domain_tests
     shard_engine_test.cpp
     matching_test.cpp
     modify_test.cpp
+    risk_controls_test.cpp
   LINK lockstep::domain)

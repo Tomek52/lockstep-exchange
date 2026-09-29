@@ -99,7 +99,15 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& out) {
     if (book == nullptr) {
         return std::unexpected(RejectReason::UnknownInstrument);
     }
-    if (const auto ok = validate(modify, book->spec()); !ok) {
+    // Mirrors on(NewOrder): validate reference-data limits, then the risk
+    // gate, before looking at order-specific state (UnknownOrder /
+    // NotOrderOwner below). The spec (task 004) only says ModifyOrder is
+    // "also gated by check_new_order"; this ordering was chosen to match the
+    // existing NewOrder precedent rather than invent a second one.
+    if (const auto ok = validate(modify, book->spec()).and_then([&] {
+            return risk_.check_new_order(modify.trader);
+        });
+        !ok) {
         return std::unexpected(ok.error());
     }
     const RestingOrder* resting = book->find(modify.order_id);
@@ -148,7 +156,16 @@ CommandResult ShardEngine::on(const ModifyOrder& modify, EventBuffer& out) {
 
 CommandResult ShardEngine::on(const BlockTrader& block, EventBuffer& out) {
     risk_.block(block.trader);
-    // TODO(task-004): cancel the trader's resting orders (CancelReason::TraderBlocked).
+    // books_ is a flat_map, so this walks instruments in id order
+    // (ADR-0004). A trader blocked earlier already had every resting order
+    // cancelled, so a duplicate BlockTrader finds nothing left to cancel here
+    // and this loop emits nothing: idempotency (ADR-0013) falls out of
+    // cancel_if's own behaviour rather than needing a separate guard.
+    for (auto&& [instrument, book_ref] : books_) {
+        book_ref.cancel_if(
+            [trader = block.trader](const RestingOrder& order) { return order.trader == trader; },
+            CancelReason::TraderBlocked, out);
+    }
     out.push(RiskCommandApplied{block.command_id});
     return CommandOutcome{};
 }
@@ -160,9 +177,22 @@ CommandResult ShardEngine::on(const UnblockTrader& unblock, EventBuffer& out) {
 }
 
 CommandResult ShardEngine::on(const KillSwitch& kill, EventBuffer& out) {
-    risk_.set_kill_switch(kill.engaged);
-    // TODO(task-004): emit InstrumentStatusChanged per book (iterate books_ in
-    // key order - deterministic) and cancel resting orders when engaging.
+    // Unlike BlockTrader, cancel_if alone would not make a redundant engage
+    // or disengage a no-op: with nothing left to cancel it would still emit
+    // InstrumentStatusChanged for every book. The spec requires a redundant
+    // toggle to emit only the ack (ADR-0013), so that is gated explicitly on
+    // the state actually changing.
+    if (risk_.halted() != kill.engaged) {
+        risk_.set_kill_switch(kill.engaged);
+        // books_ is a flat_map: instrument-id order, deterministic (ADR-0004).
+        for (auto&& [instrument, book_ref] : books_) {
+            if (kill.engaged) {
+                book_ref.cancel_if([](const RestingOrder&) { return true; },
+                                   CancelReason::KillSwitch, out);
+            }
+            out.push(InstrumentStatusChanged{instrument, kill.engaged});
+        }
+    }
     out.push(RiskCommandApplied{kill.command_id});
     return CommandOutcome{};
 }

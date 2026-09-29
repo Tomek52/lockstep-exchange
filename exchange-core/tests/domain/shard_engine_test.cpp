@@ -1,6 +1,7 @@
 #include "lockstep/domain/shard_engine.hpp"
 
 #include <variant>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -75,10 +76,15 @@ TEST_F(ShardEngineTest, CancelOfUnknownOrderIsRejected) {
 }
 
 TEST_F(ShardEngineTest, RiskCommandsAreAcknowledgedPerShard) {
+    // task 004 gave KillSwitch its real behaviour: engaging it halts every
+    // instrument the shard owns (InstrumentStatusChanged), even with nothing
+    // resting to cancel, before the ack. Full detail (idempotency, resting
+    // orders, both directions) lives in risk_controls_test.cpp.
     const auto result = engine.apply(sequenced(KillSwitch{RiskCommandId{9}, true}), out);
     ASSERT_TRUE(result.has_value());
-    ASSERT_EQ(out.size(), 1U);
-    EXPECT_EQ(std::get<RiskCommandApplied>(out.events()[0]).command_id, RiskCommandId{9});
+    const std::vector<Event> expected{InstrumentStatusChanged{instrument, true},
+                                      RiskCommandApplied{RiskCommandId{9}}};
+    EXPECT_EQ(std::vector<Event>(out.events().begin(), out.events().end()), expected);
 }
 
 }  // namespace
