@@ -20,6 +20,7 @@ decision; a new ADR supersedes it and the old one's status says so.
 | [0012](0012-journal-binary-format.md) | Own binary journal format, not protobuf | Accepted |
 | [0013](0013-risk-feedback-loop.md) | Risk feedback loop semantics | Accepted |
 | [0014](0014-testing-strategy.md) | Testing strategy | Accepted |
+| [0015](0015-requirement-tracing-with-openfasttrace.md) | Requirement tracing with OpenFastTrace | Proposed |
 
 To add one: copy the structure of any ADR, take the next number, add it to
 this table, and link it from the code or task spec that motivated it.
