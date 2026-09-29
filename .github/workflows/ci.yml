@@ -18,6 +18,12 @@ env:
 
 jobs:
   cpp:
+    # Evidence for the "presets pass" acceptance criteria (OpenFastTrace, ADR-0015).
+    # [bld->req~order-book-storage.presets-and-clang-tidy-clean~1]
+    # [bld->req~matching.existing-domain-and-determinism-tests-pass~1]
+    # [bld->req~matching.presets-and-clang-tidy-clean~1]
+    # [bld->req~modify.presets-and-clang-tidy-clean~1]
+    # [bld->req~risk-controls.presets-pass~1]
     name: C++ ${{ matrix.preset }}
     runs-on: ubuntu-24.04
     strategy:
@@ -50,8 +56,34 @@ jobs:
         run: scripts/setup-ubuntu.sh --ci
       - name: Format (clang-format, rustfmt, buf)
         run: scripts/check-format.sh
+      # Evidence for the "clang-tidy is clean" acceptance criteria (ADR-0015).
+      # [bld->req~order-book-storage.presets-and-clang-tidy-clean~1]
+      # [bld->req~matching.presets-and-clang-tidy-clean~1]
+      # [bld->req~modify.presets-and-clang-tidy-clean~1]
+      # [bld->req~risk-controls.no-nolint-in-risk-state~1]
       - name: clang-tidy
         run: scripts/run-clang-tidy.sh
+
+  trace:
+    name: Requirement tracing (OpenFastTrace)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Gate self-test
+        run: scripts/oft-trace.sh --self-test
+      - name: Trace specs, code and tests (ADR-0015)
+        run: scripts/oft-trace.sh
+      - name: Upload the HTML trace report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oft-trace-report
+          path: build/oft/report.html
+          if-no-files-found: ignore
 
   fuzz:
     name: Fuzz (60 s)
