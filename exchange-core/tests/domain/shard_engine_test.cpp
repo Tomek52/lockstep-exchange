@@ -76,10 +76,8 @@ TEST_F(ShardEngineTest, CancelOfUnknownOrderIsRejected) {
 }
 
 TEST_F(ShardEngineTest, RiskCommandsAreAcknowledgedPerShard) {
-    // task 004 gave KillSwitch its real behaviour: engaging it halts every
-    // instrument the shard owns (InstrumentStatusChanged), even with nothing
-    // resting to cancel, before the ack. Full detail (idempotency, resting
-    // orders, both directions) lives in risk_controls_test.cpp.
+    // InstrumentStatusChanged fires per book even with nothing resting to
+    // cancel (task 004); risk_controls_test.cpp covers the rest.
     const auto result = engine.apply(sequenced(KillSwitch{RiskCommandId{9}, true}), out);
     ASSERT_TRUE(result.has_value());
     const std::vector<Event> expected{InstrumentStatusChanged{instrument, true},

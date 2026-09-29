@@ -66,8 +66,12 @@ TEST_F(RiskControlsTest, BlockedTraderNewOrderIsRejectedOtherTraderUnaffected) {
         sequenced(limit_order(instrument_a, Side::Buy, 100, 5, trader_b, ClientOrderId{1}), 3),
         out);
     ASSERT_TRUE(other_result.has_value());
-    ASSERT_EQ(events_vector(out).size(), 2U);  // OrderAccepted, BookLevelChanged
-    EXPECT_TRUE(std::holds_alternative<OrderAccepted>(out.events()[0]));
+    const std::vector<Event> expected{
+        OrderAccepted{other_result->order_id, trader_b, ClientOrderId{1}, instrument_a, Side::Buy,
+                      OrderType::Limit, Price{100}, Quantity{5}},
+        BookLevelChanged{instrument_a, Side::Buy, Price{100}, Quantity{5}},
+    };
+    EXPECT_EQ(events_vector(out), expected);
 }
 
 // --- Criterion 2: blocking cancels exactly that trader's resting orders, on
@@ -253,15 +257,32 @@ TEST_F(RiskControlsTest, FailClosedGatesOnLinkStatusFailOpenIgnoresIt) {
     ASSERT_FALSE(after_link_down.has_value());
     EXPECT_EQ(after_link_down.error(), RejectReason::RiskUnavailable);
 
-    // FailOpen: the same link-down sequence never rejects.
+    // FailOpen: the same link up/down sequence never rejects, at any point.
     ShardEngine fail_open{ShardConfig{.shard = ShardId{7},
                                       .instruments = {{.id = instrument_a}},
                                       .risk_link_policy = RiskLinkPolicy::FailOpen}};
     EventBuffer fo_out;
-    const auto fail_open_result = fail_open.apply(
+
+    const auto fo_before_link = fail_open.apply(
         sequenced(limit_order(instrument_a, Side::Buy, 100, 5, trader_a, ClientOrderId{1}), 1),
         fo_out);
-    EXPECT_TRUE(fail_open_result.has_value());
+    EXPECT_TRUE(fo_before_link.has_value());
+    fo_out.clear();
+
+    ASSERT_TRUE(fail_open.apply(sequenced(RiskLinkStatus{true}, 2), fo_out).has_value());
+    fo_out.clear();
+    const auto fo_after_link_up = fail_open.apply(
+        sequenced(limit_order(instrument_a, Side::Buy, 100, 5, trader_a, ClientOrderId{2}), 3),
+        fo_out);
+    EXPECT_TRUE(fo_after_link_up.has_value());
+    fo_out.clear();
+
+    ASSERT_TRUE(fail_open.apply(sequenced(RiskLinkStatus{false}, 4), fo_out).has_value());
+    fo_out.clear();
+    const auto fo_after_link_down = fail_open.apply(
+        sequenced(limit_order(instrument_a, Side::Buy, 100, 5, trader_a, ClientOrderId{3}), 5),
+        fo_out);
+    EXPECT_TRUE(fo_after_link_down.has_value());
 }
 
 // --- check_new_order's documented precedence: halted beats blocked beats
@@ -312,7 +333,7 @@ TEST_F(RiskControlsTest, CheckPrecedenceHaltedBeatsBlockedBeatsLinkDown) {
     EXPECT_EQ(only_link_down.error(), RejectReason::RiskUnavailable);
 }
 
-// --- Criterion 6: duplicate BlockTrader with the same id changes nothing
+// --- Criterion 6: duplicate BlockTrader with the SAME id changes nothing
 // but still acks (only RiskCommandApplied on the redundant application). ---
 
 TEST_F(RiskControlsTest, DuplicateBlockTraderStillAcksButChangesNothing) {
@@ -328,9 +349,11 @@ TEST_F(RiskControlsTest, DuplicateBlockTraderStillAcksButChangesNothing) {
         engine.apply(sequenced(BlockTrader{RiskCommandId{1}, trader_a}, 2), out).has_value());
     out.clear();
 
-    const auto second = engine.apply(sequenced(BlockTrader{RiskCommandId{2}, trader_a}, 3), out);
+    // Criterion 6: "duplicate BlockTrader with the same id" - the sentinel
+    // retrying a command after a reconnect resends the identical id.
+    const auto second = engine.apply(sequenced(BlockTrader{RiskCommandId{1}, trader_a}, 3), out);
     ASSERT_TRUE(second.has_value());
-    EXPECT_EQ(events_vector(out), (std::vector<Event>{RiskCommandApplied{RiskCommandId{2}}}));
+    EXPECT_EQ(events_vector(out), (std::vector<Event>{RiskCommandApplied{RiskCommandId{1}}}));
 
     // Still blocked: unaffected by the redundant application.
     out.clear();
@@ -425,6 +448,106 @@ TEST_F(RiskControlsTest, HaltedModifyIsRejected) {
     ASSERT_FALSE(modify_result.has_value());
     EXPECT_EQ(modify_result.error(), RejectReason::TradingHalted);
     EXPECT_TRUE(out.empty());
+}
+
+// on(ModifyOrder) validates reference-data limits before the risk gate
+// (mirroring on(NewOrder)): an invalid price must still surface as
+// InvalidPrice while halted, not TradingHalted. Kills a mutant that
+// reorders the risk check ahead of validate().
+TEST_F(RiskControlsTest, InvalidPriceModifyWhileHaltedReturnsValidationErrorNotTradingHalted) {
+    const auto resting = engine.apply(
+        sequenced(limit_order(instrument_a, Side::Sell, 200, 5, trader_b, ClientOrderId{1}), 1),
+        out);
+    ASSERT_TRUE(resting.has_value());
+    out.clear();
+
+    ASSERT_TRUE(engine.apply(sequenced(KillSwitch{RiskCommandId{1}, true}, 2), out).has_value());
+    out.clear();
+
+    // Price 0 is below InstrumentSpec's default min_price of 1.
+    const auto modify_result = engine.apply(
+        sequenced(ModifyOrder{trader_b, instrument_a, resting->order_id, Price{0}, Quantity{5}}, 3),
+        out);
+    ASSERT_FALSE(modify_result.has_value());
+    EXPECT_EQ(modify_result.error(), RejectReason::InvalidPrice);
+    EXPECT_TRUE(out.empty());
+}
+
+// --- CancelOrder is not risk-gated even under FailClosed with the link
+// down: it reaches the book and succeeds normally. -----------------------
+
+TEST_F(RiskControlsTest, FailClosedCancelStillWorksWithLinkDown) {
+    ShardEngine fail_closed{ShardConfig{.shard = ShardId{9},
+                                        .instruments = {{.id = instrument_a}},
+                                        .risk_link_policy = RiskLinkPolicy::FailClosed}};
+    EventBuffer fc_out;
+
+    ASSERT_TRUE(fail_closed.apply(sequenced(RiskLinkStatus{true}, 1), fc_out).has_value());
+    fc_out.clear();
+    const auto resting = fail_closed.apply(
+        sequenced(limit_order(instrument_a, Side::Buy, 100, 5, trader_a, ClientOrderId{1}), 2),
+        fc_out);
+    ASSERT_TRUE(resting.has_value());
+    fc_out.clear();
+
+    ASSERT_TRUE(fail_closed.apply(sequenced(RiskLinkStatus{false}, 3), fc_out).has_value());
+    fc_out.clear();
+
+    const auto cancel_result = fail_closed.apply(
+        sequenced(CancelOrder{trader_a, instrument_a, resting->order_id}, 4), fc_out);
+    ASSERT_TRUE(cancel_result.has_value());
+    const std::vector<Event> expected{
+        OrderCancelled{resting->order_id, trader_a, instrument_a, Quantity{5},
+                       CancelReason::UserRequested},
+        BookLevelChanged{instrument_a, Side::Buy, Price{100}, Quantity{0}},
+    };
+    EXPECT_EQ(events_vector(fc_out), expected);
+}
+
+// --- The duplicate-client-id index (task 003) stays exact through the
+// risk-driven cancel paths: once cancel_if removes an order, its
+// (trader, client_order_id) is free again. ------------------------------
+
+TEST_F(RiskControlsTest, ClientOrderIdIsReusableAfterBlockCancelsTheOrder) {
+    ASSERT_TRUE(
+        engine
+            .apply(sequenced(
+                       limit_order(instrument_a, Side::Buy, 100, 5, trader_a, ClientOrderId{1}), 1),
+                   out)
+            .has_value());
+    out.clear();
+
+    ASSERT_TRUE(
+        engine.apply(sequenced(BlockTrader{RiskCommandId{1}, trader_a}, 2), out).has_value());
+    out.clear();
+    ASSERT_TRUE(
+        engine.apply(sequenced(UnblockTrader{RiskCommandId{2}, trader_a}, 3), out).has_value());
+    out.clear();
+
+    const auto reused = engine.apply(
+        sequenced(limit_order(instrument_a, Side::Buy, 100, 5, trader_a, ClientOrderId{1}), 4),
+        out);
+    EXPECT_TRUE(reused.has_value());
+}
+
+TEST_F(RiskControlsTest, ClientOrderIdIsReusableAfterKillSwitchCancelsTheOrder) {
+    ASSERT_TRUE(
+        engine
+            .apply(sequenced(
+                       limit_order(instrument_a, Side::Buy, 100, 5, trader_a, ClientOrderId{1}), 1),
+                   out)
+            .has_value());
+    out.clear();
+
+    ASSERT_TRUE(engine.apply(sequenced(KillSwitch{RiskCommandId{1}, true}, 2), out).has_value());
+    out.clear();
+    ASSERT_TRUE(engine.apply(sequenced(KillSwitch{RiskCommandId{2}, false}, 3), out).has_value());
+    out.clear();
+
+    const auto reused = engine.apply(
+        sequenced(limit_order(instrument_a, Side::Buy, 100, 5, trader_a, ClientOrderId{1}), 4),
+        out);
+    EXPECT_TRUE(reused.has_value());
 }
 
 }  // namespace
