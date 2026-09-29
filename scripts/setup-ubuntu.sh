@@ -39,6 +39,11 @@ $SUDO apt-get install -y -qq --no-install-recommends \
   libgrpc++-dev libgrpc-dev protobuf-compiler-grpc libprotobuf-dev protobuf-compiler \
   libgtest-dev libgmock-dev libbenchmark-dev
 
+if [[ "$CI_MODE" -eq 0 ]]; then
+  echo "==> java (for scripts/oft-trace.sh; CI's trace job uses actions/setup-java)"
+  $SUDO apt-get install -y -qq --no-install-recommends default-jre-headless
+fi
+
 echo "==> sanitizer-friendly ASLR"
 # Kernels >= 6.5 default to vm.mmap_rnd_bits=32, which makes TSan (and at times
 # ASan) abort with "unexpected memory mapping". 28 bits is the upstream-recommended
