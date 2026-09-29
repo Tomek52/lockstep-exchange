@@ -184,7 +184,7 @@ explicitly; don't claim a check you did not run.
   `ci`, `chore`.
 - **Scopes:** `domain`, `concurrency`, `app`, `journal`, `codec`, `grpc`,
   `risk-client`, `main`, `bench`, `fuzz`, `proto`, `rust`, `sentinel`,
-  `loadgen`, `cmake`, `docker`, `adr`.
+  `loadgen`, `cmake`, `docker`, `adr`, `website`.
 - Imperative mood, ≤ 72 characters in the summary. The body explains *why*
   and references the task (`Task: 005`) and any ADR.
 - Small, logical commits. **Every commit must build and pass its tests.**

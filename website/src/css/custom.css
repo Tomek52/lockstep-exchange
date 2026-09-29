@@ -1,0 +1,12 @@
+/* Versioned anchor targets (ADR-0017): leave room under the sticky navbar
+   when a link jumps to an <a id> placed inside a list item or paragraph. */
+.markdown a[id] {
+  scroll-margin-top: calc(var(--ifm-navbar-height) + 0.5rem);
+}
+
+/* Briefly highlight the requirement a link jumped to. */
+.markdown li:has(> a[id]:target),
+.markdown p:has(> a[id]:target) {
+  background: var(--ifm-color-warning-contrast-background);
+  border-radius: 4px;
+}
