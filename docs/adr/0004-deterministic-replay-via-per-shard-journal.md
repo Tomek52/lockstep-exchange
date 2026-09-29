@@ -72,3 +72,24 @@ comparison.
   `commit()` per drained batch) amortises it; the fsync policy is a
   configuration choice of the journal adapter (task 008).
 - Determinism is per shard, not global (ADR-0003).
+
+## Traceability
+
+OpenFastTrace design items for the parts of this decision that task specs
+depend on ([conventions](../../CLAUDE.md#7-requirement-tracing-openfasttrace)).
+Each item quotes the [Decision](#decision) above, which stays authoritative:
+if the two ever disagree, the Decision wins, and changing it still means a
+superseding ADR.
+
+### The domain has no hidden nondeterminism
+`dsn~deterministic-replay.no-hidden-nondeterminism-in-domain~1`
+
+"No hidden nondeterminism in the domain. Output order never depends on
+hash-container iteration: iterate `flat_map`s (ordered), or sort first. No
+randomness. Order ids come from a per-shard counter." ([Decision](#decision),
+rule 5)
+
+Covers:
+- [req~matching.identical-commands-identical-events~1](../tasks/002-matching-limit-market.md#ac-9-identical-command-sequences-produce-identical-events)
+
+Needs: impl

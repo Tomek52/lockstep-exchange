@@ -76,3 +76,48 @@ because it is keyed by trader, not by session.
   carry both.
 - The skeleton implements the handshake, inbound command broadcast and link
   status. Report forwarding, ack aggregation and reconnect are task 014.
+
+## Traceability
+
+OpenFastTrace design items for the parts of this decision that task specs
+depend on ([conventions](../../CLAUDE.md#7-requirement-tracing-openfasttrace)).
+Each item quotes the [Decision](#decision) above, which stays authoritative:
+if the two ever disagree, the Decision wins, and changing it still means a
+superseding ADR.
+
+### Each shard acknowledges every risk command it applies
+`dsn~risk-loop.risk-commands-acknowledged-per-shard~1`
+
+"Each shard journals and applies its copy, then emits
+`RiskCommandApplied{command_id}`." ([Decision](#decision), *Commands become
+journaled inputs*)
+
+Covers:
+- [req~risk-controls.risk-commands-acknowledged-per-shard~1](../tasks/004-risk-controls-in-domain.md#ac-7-risk-commands-are-acknowledged-per-shard)
+
+Needs: impl
+
+### Duplicate risk commands are acknowledged no-ops
+`dsn~risk-loop.idempotent-risk-commands~1`
+
+"Blocking an already-blocked trader and engaging an engaged kill switch are
+no-ops that still acknowledge." ([Decision](#decision), *Idempotency*)
+
+Covers:
+- [req~risk-controls.duplicate-block-trader-only-acks~1](../tasks/004-risk-controls-in-domain.md#ac-6-a-duplicate-blocktrader-changes-nothing-but-still-acks)
+
+Needs: impl
+
+### The link policy decides whether a down link rejects new orders
+`dsn~risk-loop.link-status-policy~1`
+
+"Transitions of the session (accepted → closed) are broadcast as
+`RiskLinkStatus{connected}` commands and journaled." Under **FailOpen**
+(default) the exchange keeps trading while the sentinel is unreachable; under
+**FailClosed** it rejects new orders with `RISK_UNAVAILABLE` while
+disconnected. ([Decision](#decision), *Link status is an input*)
+
+Covers:
+- [req~risk-controls.fail-closed-gates-on-link-status~1](../tasks/004-risk-controls-in-domain.md#ac-5-failclosed-gates-new-orders-on-the-risk-link-failopen-does-not)
+
+Needs: impl

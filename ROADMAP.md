@@ -5,6 +5,10 @@ increments. Within a milestone, tasks without mutual dependencies can run in
 parallel. The dependency graph and file-ownership rules are in
 [docs/tasks/README.md](docs/tasks/README.md).
 
+Milestones that have been converted to OpenFastTrace (M1 so far) are `feat`
+items; each acceptance criterion of their tasks is a `req` covering the
+milestone. Conventions: [CLAUDE.md](CLAUDE.md#7-requirement-tracing-openfasttrace).
+
 ## M0: Walking skeleton ✅
 
 Everything needed to develop safely:
@@ -16,6 +20,7 @@ Everything needed to develop safely:
 - ADRs 0001–0014, and this backlog.
 
 ## M1: Matching core
+`feat~matching-core~1`
 
 The exchange actually trades.
 
@@ -23,6 +28,8 @@ The exchange actually trades.
 - [x] [002 Price-time matching for limit and market orders](docs/tasks/002-matching-limit-market.md)
 - [x] [003 Modify (cancel/replace) and duplicate client ids](docs/tasks/003-cancel-modify-duplicates.md)
 - [x] [004 Risk controls: block, kill switch, link policy](docs/tasks/004-risk-controls-in-domain.md)
+
+Needs: req
 
 ## M2: Lock-free runtime
 

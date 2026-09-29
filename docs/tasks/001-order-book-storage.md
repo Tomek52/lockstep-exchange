@@ -68,23 +68,103 @@ Internal structure (a suggestion; any structure meeting the criteria is fine):
 
 ## Acceptance criteria
 
-1. All tests in `tests/domain/order_book_test.cpp` pass unmodified.
-2. New tests in `tests/domain/order_book_storage_test.cpp`:
-   - Cancelling the middle order of three at one level preserves FIFO order
-     of the other two, checked via successive `front()`/`reduce_front()`.
-   - `find()` returns the correct order among 10 000 resting orders spread
-     over 100 price levels on both sides.
-   - `reduce_front` partial: remaining decreases, the level total decreases,
-     and one `BookLevelChanged` carries the new total.
-   - `reduce_front` full: the order is removed; with the last order, the
-     level disappears (`best_price` moves to the next level).
-   - `cancel_if` by trader: the correct orders are removed, events come in
-     the documented order, and the return value is the count.
-   - Slot reuse: rest 1 000 and cancel 1 000, repeated 10 times. The pool's
-     capacity does not grow after the first round (expose
-     `pool_capacity()` for tests, or test via a debug accessor).
-3. `ctest --preset debug`, `--preset asan-ubsan` and `--preset tsan` pass;
-   `scripts/run-clang-tidy.sh` is clean.
+Each criterion is an OpenFastTrace requirement. Its ID is the stable name
+that tests, code and other documents refer to; the number only gives the
+reading order. Conventions: [CLAUDE.md](../../CLAUDE.md#7-requirement-tracing-openfasttrace).
+
+### AC 1: Existing order book tests pass unmodified
+`req~order-book-storage.existing-book-tests-pass-unmodified~1`
+
+All tests in `tests/domain/order_book_test.cpp` pass unmodified.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: utest
+
+### AC 2a: Cancelling a middle order preserves FIFO
+`req~order-book-storage.cancel-middle-preserves-fifo~1`
+
+New test in `tests/domain/order_book_storage_test.cpp`: cancelling the
+middle order of three at one level preserves FIFO order of the other two,
+checked via successive `front()`/`reduce_front()`.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 2b: find() locates an order among many
+`req~order-book-storage.find-among-many-orders~1`
+
+New test in `tests/domain/order_book_storage_test.cpp`: `find()` returns the
+correct order among 10 000 resting orders spread over 100 price levels on
+both sides.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 2c: Partial reduce_front shrinks the order and its level
+`req~order-book-storage.reduce-front-partial~1`
+
+New test in `tests/domain/order_book_storage_test.cpp`: `reduce_front`
+partial: remaining decreases, the level total decreases, and one
+`BookLevelChanged` carries the new total.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 2d: Full reduce_front removes the order, then the level
+`req~order-book-storage.reduce-front-full~1`
+
+New test in `tests/domain/order_book_storage_test.cpp`: `reduce_front` full:
+the order is removed; with the last order, the level disappears
+(`best_price` moves to the next level).
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 2e: cancel_if by trader cancels in the documented order
+`req~order-book-storage.cancel-if-by-trader~1`
+
+New test in `tests/domain/order_book_storage_test.cpp`: `cancel_if` by
+trader: the correct orders are removed, events come in the documented order,
+and the return value is the count.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 2f: Pool slots are reused after cancel
+`req~order-book-storage.pool-slots-reused~1`
+
+New test in `tests/domain/order_book_storage_test.cpp`: slot reuse: rest
+1 000 and cancel 1 000, repeated 10 times. The pool's capacity does not grow
+after the first round (expose `pool_capacity()` for tests, or test via a
+debug accessor).
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 3: Presets pass and clang-tidy is clean
+`req~order-book-storage.presets-and-clang-tidy-clean~1`
+
+`ctest --preset debug`, `--preset asan-ubsan` and `--preset tsan` pass;
+`scripts/run-clang-tidy.sh` is clean.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: bld
 
 ## Files expected to change
 

@@ -54,24 +54,114 @@ allowed, even when halted.
 
 ## Acceptance criteria
 
-Tests in `exchange-core/tests/domain/risk_controls_test.cpp`:
+Tests in `exchange-core/tests/domain/risk_controls_test.cpp`.
 
-1. A blocked trader's new order → `TraderBlocked`; other traders unaffected.
-2. Blocking cancels exactly that trader's resting orders, on both sides and
-   across instruments of the shard, in the documented order.
-3. After unblock, new orders are accepted again.
-4. Kill switch on: every resting order is cancelled, every instrument emits
-   `InstrumentStatusChanged{true}`, and new orders → `TradingHalted`.
-   Cancels still work. Off: orders are accepted again.
-5. FailClosed: before any `RiskLinkStatus{true}` → `RiskUnavailable`; after
-   link-up, accepted; after link-down, `RiskUnavailable` again. FailOpen:
-   always accepted.
-6. Duplicate `BlockTrader` with the same id: second application changes
-   nothing, but still acks.
-7. The existing test `ShardEngineTest.RiskCommandsAreAcknowledgedPerShard`
-   still passes, updated to the full event vector.
-8. The `NOLINTBEGIN/END` block in `risk_state.cpp` is gone; clang-tidy is clean.
-9. Presets debug, asan-ubsan and tsan pass.
+Each criterion is an OpenFastTrace requirement. Its ID is the stable name
+that tests, code and other documents refer to; the number only gives the
+reading order. Conventions: [CLAUDE.md](../../CLAUDE.md#7-requirement-tracing-openfasttrace).
+
+### AC 1: A blocked trader's new orders are rejected
+`req~risk-controls.blocked-trader-new-order-rejected~1`
+
+A blocked trader's new order → `TraderBlocked`; other traders unaffected.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 2: Blocking cancels exactly that trader's resting orders
+`req~risk-controls.block-cancels-traders-resting-orders~1`
+
+Blocking cancels exactly that trader's resting orders, on both sides and
+across instruments of the shard, in the documented order.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Depends:
+- [req~order-book-storage.cancel-if-by-trader~1](001-order-book-storage.md#ac-2e-cancel_if-by-trader-cancels-in-the-documented-order)
+
+Needs: impl, utest
+
+### AC 3: After unblock, new orders are accepted again
+`req~risk-controls.unblock-accepts-new-orders~1`
+
+After unblock, new orders are accepted again.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 4: The kill switch cancels, halts and resumes
+`req~risk-controls.kill-switch-cancels-halts-and-resumes~1`
+
+Kill switch on: every resting order is cancelled, every instrument emits
+`InstrumentStatusChanged{true}`, and new orders → `TradingHalted`.
+Cancels still work. Off: orders are accepted again.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Depends:
+- [req~order-book-storage.cancel-if-by-trader~1](001-order-book-storage.md#ac-2e-cancel_if-by-trader-cancels-in-the-documented-order)
+
+Needs: impl, utest
+
+### AC 5: FailClosed gates new orders on the risk link, FailOpen does not
+`req~risk-controls.fail-closed-gates-on-link-status~1`
+
+FailClosed: before any `RiskLinkStatus{true}` → `RiskUnavailable`; after
+link-up, accepted; after link-down, `RiskUnavailable` again. FailOpen:
+always accepted.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: dsn, utest
+
+### AC 6: A duplicate BlockTrader changes nothing but still acks
+`req~risk-controls.duplicate-block-trader-only-acks~1`
+
+Duplicate `BlockTrader` with the same id: second application changes
+nothing, but still acks.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: dsn, utest
+
+### AC 7: Risk commands are acknowledged per shard
+`req~risk-controls.risk-commands-acknowledged-per-shard~1`
+
+The existing test `ShardEngineTest.RiskCommandsAreAcknowledgedPerShard`
+still passes, updated to the full event vector.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: dsn, utest
+
+### AC 8: No NOLINT block in risk_state.cpp, clang-tidy clean
+`req~risk-controls.no-nolint-in-risk-state~1`
+
+The `NOLINTBEGIN/END` block in `risk_state.cpp` is gone; clang-tidy is clean.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: bld
+
+### AC 9: Presets pass
+`req~risk-controls.presets-pass~1`
+
+Presets debug, asan-ubsan and tsan pass.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: bld
 
 ## Files expected to change
 

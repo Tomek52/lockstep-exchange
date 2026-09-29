@@ -10,6 +10,11 @@ Acceptance criteria · Files expected to change · Out of scope · Dependencies*
 A task is done when its acceptance criteria pass *and* the repository-wide
 definition of done in CLAUDE.md holds.
 
+In specs converted to [OpenFastTrace](../adr/0015-requirement-tracing-with-openfasttrace.md)
+(001–004 so far), each acceptance criterion is a `req` item with a stable,
+descriptive ID that tests and code tag; `scripts/oft-trace.sh` checks the
+links. Format and rules: [CLAUDE.md, section 7](../../CLAUDE.md#7-requirement-tracing-openfasttrace).
+
 ## Tasks
 
 | # | Task | Layer | Hard deps | Wave |

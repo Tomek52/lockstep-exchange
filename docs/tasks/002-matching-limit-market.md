@@ -57,26 +57,137 @@ Matching rules:
 ## Acceptance criteria
 
 New tests in `exchange-core/tests/domain/matching_test.cpp`. Each asserts the
-complete event sequence, not just counts:
+complete event sequence, not just counts.
 
-1. **Non-crossing** limit rests: `OrderAccepted`, then `BookLevelChanged`
-   (own side), and no `Trade`.
-2. **Full fill** against one resting order: `Trade` at the maker's price,
-   then `BookLevelChanged` with quantity 0. The book is empty afterwards.
-3. **Partial fill, remainder rests:** buy 10 @ 101 vs ask 4 @ 100 →
-   `Trade(4 @ 100)`, ask level removed, 6 rests on the bid at 101.
-4. **Sweep across levels, best first:** asks 5 @ 100, 5 @ 101, 5 @ 102;
-   buy 12 @ 102 → trades at 100, 101 and 102 (2 lots), in that order.
-5. **FIFO within a level:** two asks at 100 (ids A then B); buy 1 fills A,
-   not B.
-6. **Price improvement:** buy @ 105 vs ask @ 100 trades at 100.
-7. **Market order on an empty book:** `OrderAccepted`, then
-   `OrderCancelled(ImmediateOrCancel)` for the full quantity.
-8. **IOC remainder** is cancelled, never rests.
-9. **Determinism:** the same 1 000 random commands (fixed seed) applied to
-   two fresh engines produce identical event vectors.
-10. **Existing tests:** `tests/domain/*` and `tests/determinism/*` pass.
-11. **Presets:** debug, asan-ubsan and tsan pass; clang-tidy is clean.
+Each criterion is an OpenFastTrace requirement. Its ID is the stable name
+that tests, code and other documents refer to; the number only gives the
+reading order. Conventions: [CLAUDE.md](../../CLAUDE.md#7-requirement-tracing-openfasttrace).
+
+### AC 1: A non-crossing limit order rests
+`req~matching.non-crossing-limit-rests~1`
+
+**Non-crossing** limit rests: `OrderAccepted`, then `BookLevelChanged`
+(own side), and no `Trade`.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 2: A full fill against one resting order empties the book
+`req~matching.full-fill-against-one-order~1`
+
+**Full fill** against one resting order: `Trade` at the maker's price, then
+`BookLevelChanged` with quantity 0. The book is empty afterwards.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Depends:
+- [req~order-book-storage.reduce-front-full~1](001-order-book-storage.md#ac-2d-full-reduce_front-removes-the-order-then-the-level)
+
+Needs: impl, utest
+
+### AC 3: A partial fill rests the remainder
+`req~matching.partial-fill-remainder-rests~1`
+
+**Partial fill, remainder rests:** buy 10 @ 101 vs ask 4 @ 100 →
+`Trade(4 @ 100)`, ask level removed, 6 rests on the bid at 101.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Depends:
+- [req~order-book-storage.reduce-front-partial~1](001-order-book-storage.md#ac-2c-partial-reduce_front-shrinks-the-order-and-its-level)
+
+Needs: impl, utest
+
+### AC 4: A sweep across levels takes the best price first
+`req~matching.sweep-levels-best-price-first~1`
+
+**Sweep across levels, best first:** asks 5 @ 100, 5 @ 101, 5 @ 102;
+buy 12 @ 102 → trades at 100, 101 and 102 (2 lots), in that order.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Depends:
+- [req~order-book-storage.reduce-front-full~1](001-order-book-storage.md#ac-2d-full-reduce_front-removes-the-order-then-the-level)
+
+Needs: impl, utest
+
+### AC 5: FIFO within a price level
+`req~matching.fifo-within-level~1`
+
+**FIFO within a level:** two asks at 100 (ids A then B); buy 1 fills A,
+not B.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 6: Price improvement trades at the maker's price
+`req~matching.price-improvement-at-maker-price~1`
+
+**Price improvement:** buy @ 105 vs ask @ 100 trades at 100.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 7: A market order on an empty book is cancelled
+`req~matching.market-order-on-empty-book-cancelled~1`
+
+**Market order on an empty book:** `OrderAccepted`, then
+`OrderCancelled(ImmediateOrCancel)` for the full quantity.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 8: An IOC remainder is cancelled, never rested
+`req~matching.ioc-remainder-cancelled~1`
+
+**IOC remainder** is cancelled, never rests.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: impl, utest
+
+### AC 9: Identical command sequences produce identical events
+`req~matching.identical-commands-identical-events~1`
+
+**Determinism:** the same 1 000 random commands (fixed seed) applied to
+two fresh engines produce identical event vectors.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: dsn, utest
+
+### AC 10: Existing domain and determinism tests pass
+`req~matching.existing-domain-and-determinism-tests-pass~1`
+
+**Existing tests:** `tests/domain/*` and `tests/determinism/*` pass.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: bld
+
+### AC 11: Presets pass and clang-tidy is clean
+`req~matching.presets-and-clang-tidy-clean~1`
+
+**Presets:** debug, asan-ubsan and tsan pass; clang-tidy is clean.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Needs: bld
 
 ## Files expected to change
 
