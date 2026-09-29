@@ -35,8 +35,9 @@ NewOrder limit_order(InstrumentId inst,
                     .quantity = Quantity{qty}};
 }
 
-// Every acceptance criterion compares the complete event sequence, not a
-// prefix of it, following the pattern set by modify_test.cpp.
+// Tests of event output compare the complete event sequence, not a prefix
+// of it, following modify_test.cpp. Tests that only check whether a command
+// is accepted or rejected assert the result alone.
 std::vector<Event> events_vector(const EventBuffer& out) {
     return {out.events().begin(), out.events().end()};
 }

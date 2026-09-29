@@ -28,7 +28,10 @@ Persist every shard's commands to disk in the format of
   `ShardEngine`'s output, not just its `InstrumentSpec`s, so `config_hash`
   must also cover the shard's `RiskLinkPolicy`; otherwise replaying a
   journal under a different policy than it was recorded with diverges
-  silently (ADR-0004, ADR-0012).
+  silently (ADR-0004, ADR-0012). This contradicts ADR-0012's definition of
+  `config_hash` (instrument specs only) and the `config_hash(specs)`
+  signature below, so it needs a new ADR superseding that part of ADR-0012
+  first; then take the policy (or the whole `ShardConfig`) as input.
 
 ## Interfaces to implement
 

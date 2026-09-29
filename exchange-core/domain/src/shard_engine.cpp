@@ -179,12 +179,11 @@ CommandResult ShardEngine::on(const UnblockTrader& unblock, EventBuffer& out) {
 CommandResult ShardEngine::on(const KillSwitch& kill, EventBuffer& out) {
     // Unlike BlockTrader, cancel_if alone would not make a redundant engage
     // a no-op: with nothing left to cancel it would still emit
-    // InstrumentStatusChanged for every book. The spec and ADR-0013 only
-    // require idempotency for re-engaging an already-engaged kill switch;
-    // treating a redundant disengage the same way is a deliberate extension
-    // here, not something either mandates, because it avoids emitting a
-    // false InstrumentStatusChanged{halted=false} transition when nothing
-    // actually resumed. Both directions are gated on the state changing.
+    // InstrumentStatusChanged for every book. ADR-0013 only requires
+    // idempotency for re-engaging an engaged kill switch; the task 004 spec
+    // extends it to a redundant disengage, so that no false
+    // InstrumentStatusChanged{halted=false} is emitted when nothing resumed.
+    // Both directions are gated on the state changing.
     if (risk_.halted() != kill.engaged) {
         risk_.set_kill_switch(kill.engaged);
         // books_ is a flat_map: instrument-id order, deterministic (ADR-0004).
