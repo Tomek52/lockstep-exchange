@@ -1,0 +1,78 @@
+"""MkDocs hook: resolve links that leave docs/ (ADR-0015).
+
+The Markdown sources stay browsable on GitHub, so they link to code and to the
+root documents with plain relative paths. On the site those targets either do
+not exist (code) or live under another name (README.md -> index.md). This hook
+rewrites such links before MkDocs validates them:
+
+- README.md, ROADMAP.md, CLAUDE.md at the repository root -> their site pages,
+  keeping the #anchor so that anchor validation still applies;
+- any other existing file or directory outside docs/ -> its GitHub URL;
+- a target that does not exist is left untouched, so `validation.links`
+  reports it and `mkdocs build --strict` fails.
+"""
+
+from __future__ import annotations
+
+import posixpath
+import re
+from pathlib import Path
+
+# Root documents that are rendered as site pages via include-markdown stubs.
+ROOT_PAGES = {
+    "README.md": "index.md",
+    "ROADMAP.md": "roadmap.md",
+    "CLAUDE.md": "agent-rules.md",
+}
+
+# Inline Markdown links and images: ](target) or ](<target>), optional title.
+_LINK = re.compile(r"(\]\()(<[^>]+>|[^)\s]+)((?:\s+\"[^\"]*\")?\))")
+_FENCE = re.compile(r"^\s*(```|~~~)")
+_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+
+
+def _rewrite(target: str, page_dir: Path, docs_dir: Path, repo_root: Path,
+             page_uri_dir: str, blob_base: str) -> str:
+    bare = target[1:-1] if target.startswith("<") else target
+    if not bare or bare.startswith(("#", "/")) or _SCHEME.match(bare):
+        return target
+    path, sep, anchor = bare.partition("#")
+    resolved = (page_dir / path).resolve()
+    if resolved == docs_dir or docs_dir in resolved.parents:
+        return target  # A normal docs link: MkDocs validates it itself.
+    try:
+        rel = resolved.relative_to(repo_root).as_posix()
+    except ValueError:
+        return target  # Outside the repository: let validation report it.
+    if rel in ROOT_PAGES:
+        site_path = posixpath.relpath(ROOT_PAGES[rel], page_uri_dir or ".")
+        return f"{site_path}{sep}{anchor}"
+    if resolved.is_dir():
+        return f"{blob_base.replace('/blob/', '/tree/', 1)}{rel}"
+    if resolved.is_file():
+        return f"{blob_base}{rel}{sep}{anchor}"
+    return target
+
+
+def on_page_markdown(markdown: str, page, config, files) -> str:  # noqa: ANN001 (MkDocs hook API)
+    docs_dir = Path(config["docs_dir"]).resolve()
+    repo_root = Path(config["config_file_path"]).resolve().parent
+    page_dir = Path(page.file.abs_src_path).resolve().parent
+    page_uri_dir = posixpath.dirname(page.file.src_uri)
+    ref = config["extra"].get("source_ref", "main")
+    blob_base = f"{config['repo_url'].rstrip('/')}/blob/{ref}/"
+
+    out: list[str] = []
+    in_fence = False
+    for line in markdown.splitlines(keepends=True):
+        if _FENCE.match(line):
+            in_fence = not in_fence
+        if not in_fence:
+            line = _LINK.sub(
+                lambda m: m.group(1)
+                + _rewrite(m.group(2), page_dir, docs_dir, repo_root, page_uri_dir, blob_base)
+                + m.group(3),
+                line,
+            )
+        out.append(line)
+    return "".join(out)

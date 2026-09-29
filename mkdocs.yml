@@ -1,0 +1,116 @@
+# Documentation site. Build with scripts/docs-check.sh (strict: every broken
+# link or missing anchor fails the build). Decision and conventions: ADR-0015.
+site_name: Lockstep
+site_description: A deterministic, lock-free exchange engine in C++23, with a Rust risk sentinel.
+repo_url: https://github.com/Tomek52/lockstep-exchange
+repo_name: Tomek52/lockstep-exchange
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - content.action.edit
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+  # Must run before the hook below, which post-processes the included text.
+  - include-markdown
+
+hooks:
+  - scripts/mkdocs_hooks.py
+
+extra:
+  # Git ref that links to source files outside docs/ point at on GitHub.
+  source_ref: main
+
+# `warn` + `mkdocs build --strict` turns every item into a build failure.
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
+nav:
+  - Home: index.md
+  - Roadmap: roadmap.md
+  - Architecture:
+      - architecture/README.md
+      - architecture/c4-context.md
+      - architecture/c4-container.md
+      - architecture/threading-dataflow.md
+      - architecture/domain-model.md
+  - Decisions (ADR):
+      - adr/README.md
+      - adr/0001-record-architecture-decisions.md
+      - adr/0002-hexagonal-architecture-enforced-by-the-build.md
+      - adr/0003-single-writer-sharding.md
+      - adr/0004-deterministic-replay-via-per-shard-journal.md
+      - adr/0005-fixed-point-prices-and-quantities.md
+      - adr/0006-grpc-service-and-stream-design.md
+      - adr/0007-dependency-management-system-packages.md
+      - adr/0008-error-handling-strategy.md
+      - adr/0009-toolchain-baseline-and-feature-fallbacks.md
+      - adr/0010-no-cpp20-modules-for-now.md
+      - adr/0011-lock-free-queues-and-memory-ordering.md
+      - adr/0012-journal-binary-format.md
+      - adr/0013-risk-feedback-loop.md
+      - adr/0014-testing-strategy.md
+      - adr/0015-documentation-site-and-versioned-anchors.md
+  - Tasks:
+      - tasks/README.md
+      - tasks/001-order-book-storage.md
+      - tasks/002-matching-limit-market.md
+      - tasks/003-cancel-modify-duplicates.md
+      - tasks/004-risk-controls-in-domain.md
+      - tasks/005-spsc-queue.md
+      - tasks/006-mpsc-queue.md
+      - tasks/007-runtime-idle-and-stats.md
+      - tasks/008-journal-writer.md
+      - tasks/009-journal-reader.md
+      - tasks/010-deterministic-replay.md
+      - tasks/011-publisher-fanout.md
+      - tasks/012-instrument-config.md
+      - tasks/013-grpc-market-data.md
+      - tasks/014-risk-client-adapter.md
+      - tasks/015-sentinel-positions-pnl.md
+      - tasks/016-sentinel-monitor-service.md
+      - tasks/017-loadgen.md
+      - tasks/018-benchmarks.md
+      - tasks/019-e2e-kill-switch.md
+  - Workflow:
+      - ai-workflow.md
+      - agent-rules.md
