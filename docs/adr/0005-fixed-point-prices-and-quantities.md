@@ -18,10 +18,10 @@ an integer count of ticks.
 
 ## Decision
 
-- **Price** = signed 64-bit integer number of ticks: `domain::Price`, wire
+- <a id="adr0005-price-integer-ticks-v1"></a>**Price** = signed 64-bit integer number of ticks: `domain::Price`, wire
   `sint64 *_ticks`. Signed so that differences and spreads are representable.
   Valid order prices are > 0.
-- **Quantity** = unsigned 64-bit integer number of lots: `domain::Quantity`,
+- <a id="adr0005-quantity-integer-lots-v1"></a>**Quantity** = unsigned 64-bit integer number of lots: `domain::Quantity`,
   wire `uint64`.
 - **Conversion to human units** (tick size, lot size, currency) is reference
   data (`InstrumentSpec`, task 012) and happens only at the edges, for

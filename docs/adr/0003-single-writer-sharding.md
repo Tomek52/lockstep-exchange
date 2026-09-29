@@ -63,7 +63,7 @@ risk client ──┼─> MPSC[shard k] ─> shard k ...      ├─> publisher 
 
 ## Consequences
 
-- The domain contains no synchronisation at all, and TSan has a small,
+- <a id="adr0003-domain-no-synchronisation-v1"></a>The domain contains no synchronisation at all, and TSan has a small,
   well-defined surface: queues, the runtime, and the atomics in `Engine`.
 - Throughput scales with shard count for workloads spread over instruments.
 - **No total order across shards.** Events from different shards may

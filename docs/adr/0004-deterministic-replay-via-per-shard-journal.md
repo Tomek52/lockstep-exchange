@@ -21,7 +21,7 @@ risk commands).
 
 ## Decision
 
-**The property.** For each shard, the sequence of `(CommandResult, events)`
+<a id="adr0004-determinism-property-v1"></a>**The property.** For each shard, the sequence of `(CommandResult, events)`
 produced by `ShardEngine::apply` is a pure function of:
 
 - the shard's `ShardConfig`, and
@@ -43,7 +43,7 @@ Rules that make this true:
 4. **External state changes are commands.** Risk commands (`BlockTrader`,
    `UnblockTrader`, `KillSwitch`) and connectivity changes (`RiskLinkStatus`)
    enter the same ingress queues and are journaled (ADR-0013).
-5. **No hidden nondeterminism in the domain.**
+5. <a id="adr0004-no-hidden-nondeterminism-v1"></a>**No hidden nondeterminism in the domain.**
    - Output order never depends on hash-container iteration: iterate
      `flat_map`s (ordered), or sort first.
    - No randomness.

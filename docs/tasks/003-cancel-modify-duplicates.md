@@ -7,11 +7,13 @@ that reuse a client order id still live for the same trader.
 
 ## Context
 
-- Rules: [domain-model.md](../architecture/domain-model.md) ("Matching rules").
+- Rules: [domain-model.md](../architecture/domain-model.md)
+  (["Matching rules"](../architecture/domain-model.md#arch-matching-rules-v1)).
 - `ShardEngine::on(const ModifyOrder&, ...)` in
   `exchange-core/domain/src/shard_engine.cpp` validates, checks
   existence/ownership, and returns `UnknownOrder` (`TODO(task-003)`).
-- Matching (`match()` from task 002) is reused for aggressive re-pricing.
+- Matching (`match()` from [task 002](002-matching-limit-market.md#t002-match-interface-v1)) is reused
+  for aggressive re-pricing.
 - Wire: `ModifyOrderRequest{trader_id, instrument_id, order_id,
   new_price_ticks, new_quantity}` in `proto/lockstep/v1/order_entry.proto`.
 
@@ -23,7 +25,7 @@ Modify semantics (`new_quantity` is the new *total remaining* quantity):
 |---|---|---|
 | same price, `new_quantity < remaining` | reduce in place, **keeps priority** | `OrderModified{kept_priority=true}`, `BookLevelChanged` |
 | same price, `new_quantity == remaining` | no-op, accepted | `OrderModified{kept_priority=true}` |
-| price change or `new_quantity > remaining` | cancel/replace: remove, then treat as an incoming order with the **same OrderId** at the new price (it may trade), rest any remainder at the tail | `OrderModified{kept_priority=false}`, `BookLevelChanged` (old level), then the matching events as in task 002 |
+| price change or `new_quantity > remaining` | cancel/replace: remove, then treat as an incoming order with the **same OrderId** at the new price (it may trade), rest any remainder at the tail | `OrderModified{kept_priority=false}`, `BookLevelChanged` (old level), then the matching events as in [task 002](002-matching-limit-market.md#t002-fill-event-order-v1) |
 
 Add to `OrderBook`:
 
@@ -46,18 +48,26 @@ lookup-only (never iterated) to preserve determinism.
 
 Tests in `exchange-core/tests/domain/modify_test.cpp`:
 
-1. Reduce at the same price keeps the order ahead of a later order at that
+1. <a id="t003-reduce-keeps-priority-v1"></a>**[t003-reduce-keeps-priority v1]**
+   Reduce at the same price keeps the order ahead of a later order at that
    level (checked via `front()`).
-2. Increase quantity loses priority: the order moves behind the later order.
-3. Price change to a crossing price trades immediately, with the same
+2. <a id="t003-increase-loses-priority-v1"></a>**[t003-increase-loses-priority v1]**
+   Increase quantity loses priority: the order moves behind the later order.
+3. <a id="t003-reprice-crossing-trades-v1"></a>**[t003-reprice-crossing-trades v1]**
+   Price change to a crossing price trades immediately, with the same
    `OrderId` in `Trade::taker_order`.
-4. Modify by a non-owner → `NotOrderOwner`, book unchanged, no events.
-5. Modify of an unknown id → `UnknownOrder`; invalid new price or quantity →
+4. <a id="t003-non-owner-rejected-v1"></a>**[t003-non-owner-rejected v1]**
+   Modify by a non-owner → `NotOrderOwner`, book unchanged, no events.
+5. <a id="t003-unknown-or-invalid-rejected-v1"></a>**[t003-unknown-or-invalid-rejected v1]**
+   Modify of an unknown id → `UnknownOrder`; invalid new price or quantity →
    `InvalidPrice` / `InvalidQuantity`.
-6. Duplicate client id while resting → `DuplicateClientOrderId`. After a
+6. <a id="t003-duplicate-client-id-rejected-v1"></a>**[t003-duplicate-client-id-rejected v1]**
+   Duplicate client id while resting → `DuplicateClientOrderId`. After a
    cancel, the same client id is accepted.
-7. The determinism test (`tests/determinism`) still passes.
-8. Presets debug, asan-ubsan and tsan pass; clang-tidy is clean.
+7. <a id="t003-determinism-test-passes-v1"></a>**[t003-determinism-test-passes v1]**
+   The determinism test (`tests/determinism`) still passes.
+8. <a id="t003-presets-and-tidy-pass-v1"></a>**[t003-presets-and-tidy-pass v1]**
+   Presets debug, asan-ubsan and tsan pass; clang-tidy is clean.
 
 ## Files expected to change
 
@@ -73,4 +83,4 @@ Tests in `exchange-core/tests/domain/modify_test.cpp`:
 
 ## Dependencies
 
-- **Hard:** 002.
+- **Hard:** [002](002-matching-limit-market.md).
