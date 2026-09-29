@@ -17,9 +17,9 @@ Observable behaviour must not change. Add the two primitives the matcher
 
 - [ADR-0003](../adr/0003-single-writer-sharding.md): a book has exactly one
   writer thread, so no synchronisation.
-- [ADR-0004](../adr/0004-deterministic-replay-via-per-shard-journal.md): no
+- [ADR-0004](../adr/0004-deterministic-replay-via-per-shard-journal.md#adr0004-no-hidden-nondeterminism-v1): no
   iteration over hash containers may influence output order.
-- [ADR-0009](../adr/0009-toolchain-baseline-and-feature-fallbacks.md): use
+- [ADR-0009](../adr/0009-toolchain-baseline-and-feature-fallbacks.md#adr0009-flat-map-fallback-v1): use
   `lockstep::domain::flat_map` (fallback on libstdc++ 14). Follow the
   portability rules in `flat_map.hpp`.
 - Current code: `exchange-core/domain/include/lockstep/domain/order_book.hpp`,
@@ -35,6 +35,8 @@ Observable behaviour must not change. Add the two primitives the matcher
 
 Keep every existing public member of `OrderBook` with the same signature and
 semantics. Add:
+
+<a id="t001-book-primitives-v1"></a>**[t001-book-primitives v1]**
 
 ```cpp
 /// Oldest order at the best price level of `side`, or nullptr if that side is empty.
@@ -68,22 +70,31 @@ Internal structure (a suggestion; any structure meeting the criteria is fine):
 
 ## Acceptance criteria
 
-1. All tests in `tests/domain/order_book_test.cpp` pass unmodified.
-2. New tests in `tests/domain/order_book_storage_test.cpp`:
-   - Cancelling the middle order of three at one level preserves FIFO order
+1. <a id="t001-existing-book-tests-unchanged-v1"></a>**[t001-existing-book-tests-unchanged v1]**
+   All tests in `tests/domain/order_book_test.cpp` pass unmodified.
+2. <a id="t001-storage-tests-v1"></a>**[t001-storage-tests v1]**
+   New tests in `tests/domain/order_book_storage_test.cpp`:
+   - <a id="t001-cancel-middle-keeps-fifo-v1"></a>**[t001-cancel-middle-keeps-fifo v1]**
+     Cancelling the middle order of three at one level preserves FIFO order
      of the other two, checked via successive `front()`/`reduce_front()`.
-   - `find()` returns the correct order among 10 000 resting orders spread
+   - <a id="t001-find-among-10k-orders-v1"></a>**[t001-find-among-10k-orders v1]**
+     `find()` returns the correct order among 10 000 resting orders spread
      over 100 price levels on both sides.
-   - `reduce_front` partial: remaining decreases, the level total decreases,
+   - <a id="t001-reduce-front-partial-v1"></a>**[t001-reduce-front-partial v1]**
+     `reduce_front` partial: remaining decreases, the level total decreases,
      and one `BookLevelChanged` carries the new total.
-   - `reduce_front` full: the order is removed; with the last order, the
+   - <a id="t001-reduce-front-full-v1"></a>**[t001-reduce-front-full v1]**
+     `reduce_front` full: the order is removed; with the last order, the
      level disappears (`best_price` moves to the next level).
-   - `cancel_if` by trader: the correct orders are removed, events come in
-     the documented order, and the return value is the count.
-   - Slot reuse: rest 1 000 and cancel 1 000, repeated 10 times. The pool's
+   - <a id="t001-cancel-if-by-trader-v1"></a>**[t001-cancel-if-by-trader v1]**
+     `cancel_if` by trader: the correct orders are removed, events come in
+     the [documented order](#t001-book-primitives-v1), and the return value is the count.
+   - <a id="t001-pool-slot-reuse-v1"></a>**[t001-pool-slot-reuse v1]**
+     Slot reuse: rest 1 000 and cancel 1 000, repeated 10 times. The pool's
      capacity does not grow after the first round (expose
      `pool_capacity()` for tests, or test via a debug accessor).
-3. `ctest --preset debug`, `--preset asan-ubsan` and `--preset tsan` pass;
+3. <a id="t001-presets-and-tidy-pass-v1"></a>**[t001-presets-and-tidy-pass v1]**
+   `ctest --preset debug`, `--preset asan-ubsan` and `--preset tsan` pass;
    `scripts/run-clang-tidy.sh` is clean.
 
 ## Files expected to change

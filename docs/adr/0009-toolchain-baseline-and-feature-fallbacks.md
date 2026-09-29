@@ -36,7 +36,7 @@ while building the skeleton produced these results:
 3. **`std::stacktrace`:** the probe tries without an extra library, then with
    `stdc++exp`, and exposes the result as the `lockstep::stacktrace` INTERFACE
    target.
-4. **`std::flat_map`:** `lockstep/domain/flat_map.hpp` selects `std::flat_map`
+4. <a id="adr0009-flat-map-fallback-v1"></a>**`std::flat_map`:** `lockstep/domain/flat_map.hpp` selects `std::flat_map`
    when `__cpp_lib_flat_map >= 202207L`, else
    `detail::sorted_vector_map`, our fallback. The fallback:
    - uses the same layout as the standard one: sorted parallel key and value

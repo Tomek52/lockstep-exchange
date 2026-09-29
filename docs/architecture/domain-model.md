@@ -88,7 +88,7 @@ plain copy.
 ([ADR-0008](../adr/0008-error-handling-strategy.md)). Validation is `constexpr`,
 and its boundary cases are `static_assert`ed.
 
-## Matching rules (target behaviour, tasks 001–004)
+## <a id="arch-matching-rules-v1"></a>Matching rules (target behaviour, tasks 001–004)
 
 - **Price-time priority.** Better price first; at equal price, earlier
   sequence first.
@@ -97,16 +97,17 @@ and its boundary cases are `static_assert`ed.
   remainder is cancelled (`CancelReason::ImmediateOrCancel`).
 - **Modify.** Reducing quantity at the same price keeps priority. A price
   change or quantity increase loses priority (cancel/replace).
-- **Duplicate client order ids (task 003).** A NewOrder is rejected
+- **Duplicate client order ids ([task 003](../tasks/003-cancel-modify-duplicates.md#t003-duplicate-client-ids-rule-v1)).** A NewOrder is rejected
   (`RejectReason::DuplicateClientOrderId`) if `(trader, client_order_id)`
   already names an order resting on any book the shard owns; the id is free
   again as soon as that order is filled or cancelled. Each `OrderBook` keeps
   this index exactly in sync with what it has resting (inserted in `rest()`,
   erased in the same `remove()` every cancel/fill/replace path already goes
   through), so `ShardEngine` only ever asks each of its books, never
-  iterating a hash container for the answer (ADR-0004).
+  iterating a hash container for the answer
+  ([ADR-0004](../adr/0004-deterministic-replay-via-per-shard-journal.md#adr0004-no-hidden-nondeterminism-v1)).
 - **Self-trade.** Allowed in v1 (documented simplification).
-- **Risk gate (task 004).** `NewOrder` and `ModifyOrder` both go through
+- **Risk gate ([task 004](../tasks/004-risk-controls-in-domain.md#t004-risk-gate-order-v1)).** `NewOrder` and `ModifyOrder` both go through
   `RiskState::check_new_order`, in this order: halted
   (`RejectReason::TradingHalted`) beats trader blocked
   (`RejectReason::TraderBlocked`) beats, under `RiskLinkPolicy::FailClosed`
@@ -121,7 +122,8 @@ and its boundary cases are `static_assert`ed.
   (`InstrumentStatusChanged`) and every resting order is cancelled
   (`CancelReason::KillSwitch`). Both `BlockTrader` and `KillSwitch` are
   idempotent: reapplying an already-applied one changes nothing but still
-  emits `RiskCommandApplied` (ADR-0013).
+  emits `RiskCommandApplied`
+  ([ADR-0013](../adr/0013-risk-feedback-loop.md#adr0013-idempotency-v1)).
 
 ## The determinism contract
 

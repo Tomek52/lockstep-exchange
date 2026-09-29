@@ -25,7 +25,7 @@ an external controller into a deterministic, sharded core raises questions:
 - The sentinel refuses an incompatible protocol major with
   `FAILED_PRECONDITION`.
 
-**Commands become journaled inputs.**
+<a id="adr0013-commands-journaled-v1"></a>**Commands become journaled inputs.**
 
 - The risk client decodes each `RiskCommand` into a domain command
   (`BlockTrader`, `UnblockTrader`, `KillSwitch`).
@@ -40,7 +40,7 @@ an external controller into a deterministic, sharded core raises questions:
 shards and sends one `CommandApplied{command_id}` upstream once every shard
 has applied it (task 014).
 
-**Idempotency.**
+<a id="adr0013-idempotency-v1"></a>**Idempotency.**
 
 - `command_id` is the idempotency key.
 - Blocking an already-blocked trader and engaging an engaged kill switch are
@@ -48,7 +48,7 @@ has applied it (task 014).
 - The sentinel emits each action once per breach, not on every subsequent
   fill (task 015).
 
-**Link status is an input.**
+<a id="adr0013-link-status-input-v1"></a>**Link status is an input.**
 
 - Transitions of the session (accepted → closed) are broadcast as
   `RiskLinkStatus{connected}` commands and journaled.

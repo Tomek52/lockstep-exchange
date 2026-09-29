@@ -9,9 +9,9 @@ or cancel the remainder according to order type and time in force.
 ## Context
 
 - Domain model and target rules:
-  [docs/architecture/domain-model.md](../architecture/domain-model.md)
+  [docs/architecture/domain-model.md](../architecture/domain-model.md#arch-matching-rules-v1)
   ("Matching rules").
-- [ADR-0004](../adr/0004-deterministic-replay-via-per-shard-journal.md): the
+- [ADR-0004](../adr/0004-deterministic-replay-via-per-shard-journal.md#adr0004-replay-property-v1): the
   output must be a pure function of the command sequence.
 - [ADR-0005](../adr/0005-fixed-point-prices-and-quantities.md): integer ticks
   and lots only.
@@ -19,7 +19,7 @@ or cancel the remainder according to order type and time in force.
   `exchange-core/domain/src/shard_engine.cpp` currently validates, emits
   `OrderAccepted` and stops (`TODO(task-002)`).
 - The book primitives `front(Side)`, `reduce_front(Side, Quantity, EventBuffer&)`
-  and `rest(...)` come from task 001.
+  and `rest(...)` come from [task 001](001-order-book-storage.md#t001-book-primitives-v1).
 
 ## Interfaces to implement
 
@@ -49,7 +49,8 @@ Matching rules:
   P matches bids with price ≥ P. A market order matches any price.
 - Best price first; within a price, the oldest resting order first (FIFO).
 - Trade price = the **resting** order's price.
-- **Event order per fill:** `Trade{instrument, price, qty, aggressor_side,
+- <a id="t002-event-order-per-fill-v1"></a>**[t002-event-order-per-fill v1]**
+  **Event order per fill:** `Trade{instrument, price, qty, aggressor_side,
   maker_order, maker_trader, taker_order, taker_trader}`, then the maker
   level's `BookLevelChanged` (emitted by `reduce_front`).
 - Self-trade is allowed (documented simplification).
@@ -59,24 +60,35 @@ Matching rules:
 New tests in `exchange-core/tests/domain/matching_test.cpp`. Each asserts the
 complete event sequence, not just counts:
 
-1. **Non-crossing** limit rests: `OrderAccepted`, then `BookLevelChanged`
+1. <a id="t002-non-crossing-limit-rests-v1"></a>**[t002-non-crossing-limit-rests v1]**
+   **Non-crossing** limit rests: `OrderAccepted`, then `BookLevelChanged`
    (own side), and no `Trade`.
-2. **Full fill** against one resting order: `Trade` at the maker's price,
+2. <a id="t002-full-fill-v1"></a>**[t002-full-fill v1]**
+   **Full fill** against one resting order: `Trade` at the maker's price,
    then `BookLevelChanged` with quantity 0. The book is empty afterwards.
-3. **Partial fill, remainder rests:** buy 10 @ 101 vs ask 4 @ 100 →
+3. <a id="t002-partial-fill-remainder-rests-v1"></a>**[t002-partial-fill-remainder-rests v1]**
+   **Partial fill, remainder rests:** buy 10 @ 101 vs ask 4 @ 100 →
    `Trade(4 @ 100)`, ask level removed, 6 rests on the bid at 101.
-4. **Sweep across levels, best first:** asks 5 @ 100, 5 @ 101, 5 @ 102;
+4. <a id="t002-sweep-levels-best-first-v1"></a>**[t002-sweep-levels-best-first v1]**
+   **Sweep across levels, best first:** asks 5 @ 100, 5 @ 101, 5 @ 102;
    buy 12 @ 102 → trades at 100, 101 and 102 (2 lots), in that order.
-5. **FIFO within a level:** two asks at 100 (ids A then B); buy 1 fills A,
+5. <a id="t002-fifo-within-level-v1"></a>**[t002-fifo-within-level v1]**
+   **FIFO within a level:** two asks at 100 (ids A then B); buy 1 fills A,
    not B.
-6. **Price improvement:** buy @ 105 vs ask @ 100 trades at 100.
-7. **Market order on an empty book:** `OrderAccepted`, then
+6. <a id="t002-price-improvement-v1"></a>**[t002-price-improvement v1]**
+   **Price improvement:** buy @ 105 vs ask @ 100 trades at 100.
+7. <a id="t002-market-order-empty-book-v1"></a>**[t002-market-order-empty-book v1]**
+   **Market order on an empty book:** `OrderAccepted`, then
    `OrderCancelled(ImmediateOrCancel)` for the full quantity.
-8. **IOC remainder** is cancelled, never rests.
-9. **Determinism:** the same 1 000 random commands (fixed seed) applied to
+8. <a id="t002-ioc-remainder-cancelled-v1"></a>**[t002-ioc-remainder-cancelled v1]**
+   **IOC remainder** is cancelled, never rests.
+9. <a id="t002-determinism-same-events-v1"></a>**[t002-determinism-same-events v1]**
+   **Determinism:** the same 1 000 random commands (fixed seed) applied to
    two fresh engines produce identical event vectors.
-10. **Existing tests:** `tests/domain/*` and `tests/determinism/*` pass.
-11. **Presets:** debug, asan-ubsan and tsan pass; clang-tidy is clean.
+10. <a id="t002-existing-tests-pass-v1"></a>**[t002-existing-tests-pass v1]**
+    **Existing tests:** `tests/domain/*` and `tests/determinism/*` pass.
+11. <a id="t002-presets-and-tidy-pass-v1"></a>**[t002-presets-and-tidy-pass v1]**
+    **Presets:** debug, asan-ubsan and tsan pass; clang-tidy is clean.
 
 ## Files expected to change
 
@@ -94,4 +106,4 @@ complete event sequence, not just counts:
 
 ## Dependencies
 
-- **Hard:** 001 (book primitives).
+- **Hard:** 001 ([book primitives](001-order-book-storage.md#t001-book-primitives-v1)).
