@@ -121,6 +121,40 @@ Tests:
 - Anything linking gRPC or protobuf must be labelled `grpc`, which keeps it
   out of the TSan run ([ADR-0007](docs/adr/0007-dependency-management-system-packages.md)).
 
+Documentation anchors ([ADR-0017](docs/adr/0017-docs-site-and-versioned-anchors.md)):
+- Docs are plain CommonMark, read on GitHub and rendered by Docusaurus
+  (`website/`). No front matter, MDX, imports or JSX in `.md` files.
+- A requirement that others can reference gets a versioned anchor: raw
+  `<a id="ID"></a>` at the start of its list item, paragraph or heading.
+  Never `{#id}`: GitHub shows it as text, and links to it do not work there.
+- `ID` is `<prefix>-<descriptive-words>-v<N>`:
+  - prefixes: `tNNN` (task spec), `adrNNNN` (ADR), `arch`
+    (`docs/architecture/`), e.g. `t004-blocked-trader-rejected-v1`,
+    `adr0013-idempotency-v1`;
+  - words: lowercase kebab-case, saying what the point requires, never its
+    list number.
+- Task anchors are followed by a visible marker:
+  `1. <a id="t004-blocked-trader-rejected-v1"></a>**[t004-blocked-trader-rejected v1]**`,
+  then the unchanged text on the next line. Keep the item number. Once a task
+  uses anchors, every acceptance criterion needs one.
+- Link to the exact point: `004-risk-controls-in-domain.md#t004-blocked-trader-rejected-v1`,
+  using relative `.md` paths so the link works on GitHub and in the site.
+- **Never rename an existing ID.** The only allowed change is bumping `-vN`
+  (anchor and marker together), and you must bump it whenever the point's
+  content (meaning, values, order) changes. Reflowing or fixing typos is not
+  a content change. Delete an anchor only together with the point it marks.
+- After a bump, run `scripts/docs-check.sh`. For each reported reference,
+  re-read the referring text against the new wording. Update the link to
+  `-vN+1` only if the reference is still true. Otherwise fix the referring
+  document, or raise the conflict. `/docs-sync` automates the triage.
+- Constructs to avoid in `.md` (they broke or silently changed rendering in
+  the pilot):
+  - a bare `<Type>` outside backticks becomes an HTML tag and vanishes, on
+    GitHub too; write `` `std::optional<T>` ``;
+  - `<span id>` and other non-`<a>` anchors are not checked by the build;
+  - a continuation line must be indented to the item's content column
+    (4 spaces after `10. `, 3 after `1. `).
+
 ## 3. How to build and test
 
 Everything runs on Ubuntu 24.04 (native, WSL2, or the CI image). First time:
@@ -141,12 +175,16 @@ cd rust && cargo fmt --all -- --check && cargo clippy --all-targets --locked -- 
 scripts/check-format.sh                  # clang-format + rustfmt + buf format (--fix to apply)
 scripts/run-clang-tidy.sh                # clang-tidy over all owned C++ sources
 scripts/check-proto.sh                   # buf lint + breaking check
+scripts/docs-check.sh                    # anchor lint + Docusaurus build (links, anchors)
 
 # Cross-language smoke test (build debug preset and `cargo build` first)
 scripts/e2e-smoke.sh
 
 # Whole stack
 docker compose -f deploy/docker-compose.yml up --build
+
+# Docs site (Node >= 20): live preview at http://localhost:3000
+cd website && npm ci && npm start
 ```
 
 If sanitizers abort with "unexpected memory mapping", run
@@ -167,6 +205,8 @@ explicitly; don't claim a check you did not run.
 - [ ] If `proto/` changed: `scripts/check-proto.sh` passes, and both builds
       compile.
 - [ ] If the wiring changed: `scripts/e2e-smoke.sh` passes.
+- [ ] If any `.md` file changed: `scripts/docs-check.sh` passes, and every
+      content change to an anchored point bumped its `-vN`.
 - [ ] **An ADR was added** if you made a decision a reasonable engineer could
       have made differently (a new dependency, format, threading rule,
       protocol change).

@@ -173,6 +173,11 @@ GitHub Actions: all 11 jobs passed on the first run after publishing (run 363488
 - [AI-assisted workflow](docs/ai-workflow.md) and the agent rules in
   [CLAUDE.md](CLAUDE.md).
 
+The same Markdown is also browsable as a Docusaurus site, with a sidebar and
+rendered diagrams: `cd website && npm ci && npm start`. Requirements carry
+versioned anchors, and `scripts/docs-check.sh` fails on any stale reference
+([ADR-0017](docs/adr/0017-docs-site-and-versioned-anchors.md)).
+
 ## License
 
 [MIT](LICENSE)

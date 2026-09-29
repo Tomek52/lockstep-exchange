@@ -105,6 +105,7 @@ seen most often:
 | clang-tidy (warnings as errors) and clippy pedantic | bug patterns, style drift | `.clang-tidy`, `rust/Cargo.toml` |
 | `buf lint` / `buf breaking` | contract drift across languages | `scripts/check-proto.sh` |
 | Cross-process e2e smoke | wiring that only fails between processes | `scripts/e2e-smoke.sh` |
+| Versioned doc anchors + Docusaurus build | a reference to a requirement whose content changed, broken links | `scripts/docs-check.sh`, `/docs-sync` |
 | FeatureProbe | toolchain assumptions | `cmake/FeatureProbe.cmake` |
 
 ## Agents and skills
