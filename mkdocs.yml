@@ -28,6 +28,10 @@ theme:
 
 extra_css:
   - stylesheets/anchors.css
+  - stylesheets/diagrams.css
+
+extra_javascript:
+  - javascripts/diagram-zoom.js
 
 markdown_extensions:
   - attr_list

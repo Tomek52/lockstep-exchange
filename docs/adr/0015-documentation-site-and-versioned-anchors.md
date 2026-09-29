@@ -35,7 +35,9 @@ include-markdown rely on.
   paths in the source. The hook `scripts/mkdocs_hooks.py` rewrites them at
   build time: root documents to their site pages, existing code paths to
   GitHub URLs. A path that does not exist is left alone so the build fails.
-- Mermaid diagrams use Material's native `pymdownx.superfences` integration.
+- Mermaid diagrams use Material's native `pymdownx.superfences` integration. Wide
+  diagrams are scaled down to the content column; clicking one opens it full
+  screen (`docs/javascripts/diagram-zoom.js`).
 - The sources follow GitHub's Markdown dialect, not Python-Markdown's: the
   hook adds the blank line Python-Markdown needs before a list, and
   `mdx_truly_sane_lists` accepts the 2-space nested indent.
