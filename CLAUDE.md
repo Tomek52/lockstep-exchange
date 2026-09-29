@@ -141,6 +141,7 @@ cd rust && cargo fmt --all -- --check && cargo clippy --all-targets --locked -- 
 scripts/check-format.sh                  # clang-format + rustfmt + buf format (--fix to apply)
 scripts/run-clang-tidy.sh                # clang-tidy over all owned C++ sources
 scripts/check-proto.sh                   # buf lint + breaking check
+scripts/oft-trace.sh                     # requirement tracing gate (Java 17+), see section 7
 
 # Cross-language smoke test (build debug preset and `cargo build` first)
 scripts/e2e-smoke.sh
@@ -167,6 +168,9 @@ explicitly; don't claim a check you did not run.
 - [ ] If `proto/` changed: `scripts/check-proto.sh` passes, and both builds
       compile.
 - [ ] If the wiring changed: `scripts/e2e-smoke.sh` passes.
+- [ ] `scripts/oft-trace.sh` passes. In a converted spec, every acceptance
+      criterion you implemented is covered by tags on its tests and code
+      (section 7).
 - [ ] **An ADR was added** if you made a decision a reasonable engineer could
       have made differently (a new dependency, format, threading rule,
       protocol change).
@@ -205,3 +209,125 @@ explicitly; don't claim a check you did not run.
 - `std::stacktrace` needs `lockstep::stacktrace` (it links `-lstdc++exp`).
 - When unsure whether a C++23 feature is available, don't guess: add a probe
   to `cmake/FeatureProbe.cmake`.
+
+## 7. Requirement tracing (OpenFastTrace)
+
+Specs, code and tests are linked with [OpenFastTrace](https://github.com/itsallcode/openfasttrace)
+(OFT), decided in [ADR-0015](docs/adr/0015-requirement-tracing-with-openfasttrace.md).
+Converted so far: milestone M1 (tasks 001–004) and ADRs 0004 and 0013. The
+other specs keep their numbered criteria until they are converted; do not
+convert them as a side effect of another change.
+
+**Artifact types.**
+
+| Type | What | Where | `Needs` |
+|---|---|---|---|
+| `feat` | a milestone | `ROADMAP.md` | `req` |
+| `req` | one acceptance criterion (one sub-bullet = one item) | `docs/tasks/NNN-*.md` | see below |
+| `dsn` | an ADR decision that a criterion relies on | `## Traceability` at the end of the ADR | `impl` |
+| `impl` | the code that implements a `req` or `dsn` | tag in C++/Rust | – |
+| `utest` | a test from a `unit`-labelled executable, or a Rust unit test | tag above the test | – |
+| `itest` | a `determinism`, `grpc` or e2e test | tag above the test | – |
+| `bld` | a CI job that is the evidence for a process criterion | tag in `.github/workflows/ci.yml` | – |
+
+A behaviour criterion `Needs: impl, utest` (`itest` where its test is an
+integration test). If an ADR decision is the solution, it `Needs: dsn, utest`
+instead and the `dsn` item needs `impl`. A process criterion ("presets
+pass", "clang-tidy is clean") `Needs: bld`.
+
+**IDs.** `<type>~<scope>.<descriptive-name>~<revision>`, lowercase kebab-case:
+
+<!-- oft:off -->
+```text
+req~risk-controls.duplicate-block-trader-only-acks~1
+dsn~risk-loop.idempotent-risk-commands~1
+feat~matching-core~1
+```
+<!-- oft:on -->
+
+- `scope` is the task's slug (`order-book-storage`, `matching`, `modify`,
+  `risk-controls`) or the ADR's slug (`deterministic-replay`, `risk-loop`).
+  A new spec picks its slug once, from its title, never from its number.
+- The name says what the item requires. Never derive it from the
+  criterion's number or position: numbers are for reading order only and
+  stay in the heading (`### AC 6: ...`).
+- **Never change an ID's type, scope or name.** Tests, code and other specs
+  refer to it. If the meaning becomes something else entirely, remove the
+  old item with all its links and add a new one.
+- **When the content of an item changes meaning, bump its revision**
+  (`~1` → `~2`) and, in the same commit, update every `Covers`, `Depends`
+  and tag that refers to it, after re-checking that each test and piece of
+  code still does what the new text says. The gate reports every link you
+  missed as `outdated`. A typo or rewording with the same meaning does not
+  bump the revision, and neither does a `Status` change.
+
+**Markdown syntax** (OFT's parser is strict; these are verified, not
+guessed):
+
+<!-- oft:off -->
+```markdown
+### AC 6: A duplicate BlockTrader changes nothing but still acks
+`req~risk-controls.duplicate-block-trader-only-acks~1`
+
+Duplicate `BlockTrader` with the same id: second application changes
+nothing, but still acks.
+
+Covers:
+- [feat~matching-core~1](../../ROADMAP.md#m1-matching-core)
+
+Depends:
+- [req~order-book-storage.cancel-if-by-trader~1](001-order-book-storage.md#ac-2e-cancel_if-by-trader-cancels-in-the-documented-order)
+
+Needs: dsn, utest
+```
+<!-- oft:on -->
+
+- Every item gets its own heading, with the ID alone on the next line in
+  backticks. An item runs until the next heading, so put no prose after
+  `Needs:`.
+- `Covers:` and `Depends:` take a bulleted list only. `Covers: some-id` on
+  one line is silently treated as description text.
+- A list entry may be a Markdown link, as above, so the reference is
+  clickable on GitHub. The anchor is GitHub's slug of the target heading;
+  if a heading changes, the link breaks but the trace does not.
+- `Depends:` records hard dependencies between criteria (a spec's
+  "Dependencies" section). OFT does not check it; the gate does.
+- In an ADR, never put items inside the Decision. Add or extend a
+  `## Traceability` section at the end, quoting the Decision (which stays
+  authoritative).
+- `Status: proposed` goes on the line right after the ID (see below).
+
+**Tags in code, tests and CI.**
+
+<!-- oft:off -->
+```cpp
+// [utest->req~risk-controls.duplicate-block-trader-only-acks~1]
+TEST_F(RiskControlsTest, DuplicateBlockTraderStillAcksButChangesNothing) {
+```
+<!-- oft:on -->
+
+- Tests: directly above `TEST`/`TEST_F` (or `#[test]`). Tag every test that
+  proves the criterion, not just one.
+- Code: `impl` tags on the narrowest definition that implements the item
+  (a function, or the branch inside it), not on a whole file.
+- One tag per line, under 100 columns: clang-format reflows longer comment
+  lines, which breaks the tag.
+- Tags are the one kind of comment that is not a *why* comment (section 2).
+  Keep existing comments next to them.
+- Never tag a test to a criterion it does not actually check, just to
+  make the trace pass.
+
+**Tasks not implemented yet.** Their criteria (and `dsn` items that nothing
+implements yet) carry `Status: proposed`, and the gate allows them to be
+uncovered. When the task is done, delete those lines in the same change that
+ticks its box in `ROADMAP.md`; the gate prints a note for any `proposed` item
+that is already fully covered.
+
+**The gate.** `scripts/oft-trace.sh` traces `docs/`, `ROADMAP.md`,
+`exchange-core/`, `rust/crates/` and `.github/workflows/`, writes
+`build/oft/report.html`, and fails on broken or outdated links, on broken
+`Depends`, and on missing coverage of any item that is not `proposed`.
+`--self-test` checks the gate itself against `scripts/oft-fixtures/`. Do not
+work around a failure: no `<!-- oft:off -->` around real items, no tags on
+tests that do not check the item, no edits to the gate or its fixtures to
+make a violation pass (section 1 applies).

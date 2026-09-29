@@ -71,6 +71,15 @@ scripts/run-clang-tidy.sh >"${log}" 2>&1
 code=$?
 record "run-clang-tidy.sh" "${code}" "$(outcome "${code}" "${log}")"
 
+if command -v java >/dev/null; then
+  log="${log_dir}/oft-trace.log"
+  { scripts/oft-trace.sh --self-test && scripts/oft-trace.sh; } >"${log}" 2>&1
+  code=$?
+  record "oft-trace.sh" "${code}" "$(grep -m1 '^oft gate:' "${log}" || tail -1 "${log}")"
+else
+  skip "oft-trace.sh" "java is not installed (needs Java 17+, CLAUDE.md section 7)"
+fi
+
 changed="$(git diff --name-only "${base}"...HEAD 2>/dev/null; git diff --name-only HEAD)"
 
 if grep -q '^rust/' <<<"${changed}"; then

@@ -15,6 +15,7 @@ description: Repository conventions for driving a Lockstep pull request to green
 | `Rust` | `cd rust && cargo fmt --all -- --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked` |
 | `Proto consistency` | `scripts/check-proto.sh` |
 | `End-to-end smoke` | debug build, `cd rust && cargo build --locked`, `scripts/e2e-smoke.sh` |
+| `Requirement tracing (OpenFastTrace)` | `scripts/oft-trace.sh --self-test && scripts/oft-trace.sh` (Java 17+); read `build/oft/report.txt`, and fix links per CLAUDE.md section 7 |
 
 Always reproduce the failure locally first, then show the same command
 passing before pushing.

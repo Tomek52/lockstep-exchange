@@ -22,6 +22,8 @@ It:
   asan-ubsan, **tsan** (never optional);
 - runs `ctest -L architecture`, `scripts/check-format.sh`,
   `scripts/run-clang-tidy.sh`;
+- runs the requirement tracing gate (`scripts/oft-trace.sh`, with its
+  self-test) when Java is installed;
 - runs the Rust and proto checks when `rust/` or `proto/` changed relative to
   `origin/main`, and tells you when the e2e smoke test applies.
 

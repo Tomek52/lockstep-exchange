@@ -106,6 +106,7 @@ seen most often:
 | `buf lint` / `buf breaking` | contract drift across languages | `scripts/check-proto.sh` |
 | Cross-process e2e smoke | wiring that only fails between processes | `scripts/e2e-smoke.sh` |
 | FeatureProbe | toolchain assumptions | `cmake/FeatureProbe.cmake` |
+| Requirement tracing (OpenFastTrace), with a self-test | criteria without tests or code, tags to removed or reworded criteria | `scripts/oft-trace.sh`, CI `trace` job |
 
 ## Agents and skills
 
