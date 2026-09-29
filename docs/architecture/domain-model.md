@@ -106,8 +106,22 @@ and its boundary cases are `static_assert`ed.
   through), so `ShardEngine` only ever asks each of its books, never
   iterating a hash container for the answer (ADR-0004).
 - **Self-trade.** Allowed in v1 (documented simplification).
-- **Blocked trader.** New orders are rejected and resting orders cancelled.
-  **Kill switch:** every instrument is halted and resting orders cancelled.
+- **Risk gate (task 004).** `NewOrder` and `ModifyOrder` both go through
+  `RiskState::check_new_order`, in this order: halted
+  (`RejectReason::TradingHalted`) beats trader blocked
+  (`RejectReason::TraderBlocked`) beats, under `RiskLinkPolicy::FailClosed`
+  only, the risk-sentinel link being down (`RejectReason::RiskUnavailable`).
+  For `ModifyOrder` this check sits after reference-data validation and
+  before the `UnknownOrder`/`NotOrderOwner` lookups, mirroring `NewOrder`'s
+  validate-then-risk order. `CancelOrder` is never gated by it.
+- **Blocked trader.** New orders and modifies are rejected and every
+  resting order of that trader is cancelled
+  (`CancelReason::TraderBlocked`), across every book the shard owns.
+  **Kill switch:** every instrument the shard owns is halted
+  (`InstrumentStatusChanged`) and every resting order is cancelled
+  (`CancelReason::KillSwitch`). Both `BlockTrader` and `KillSwitch` are
+  idempotent: reapplying an already-applied one changes nothing but still
+  emits `RiskCommandApplied` (ADR-0013).
 
 ## The determinism contract
 
