@@ -1,0 +1,6 @@
+# Documentation site toolchain (MkDocs + Material). Pinned exactly so that
+# `mkdocs build --strict` gives the same verdict locally and in CI.
+# mkdocs stays on 1.x: 2.0 drops the plugin system Material depends on.
+mkdocs==1.6.1
+mkdocs-material==9.7.7
+pymdown-extensions==12.1

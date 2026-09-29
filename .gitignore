@@ -21,3 +21,7 @@ timeout-*
 .idea/
 *.swp
 .DS_Store
+
+# Documentation site (MkDocs)
+/.venv-docs/
+/site/
