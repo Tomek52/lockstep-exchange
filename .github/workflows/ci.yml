@@ -118,6 +118,20 @@ jobs:
       # Both code generators must accept the contracts; the cpp and rust jobs
       # compile them, this job fails fast on schema problems.
 
+  docs:
+    name: Docs (anchors + site build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      # Fails on broken links, broken or stale versioned anchors (ADR-0017).
+      - name: Anchor lint and Docusaurus build
+        run: scripts/docs-check.sh --ci
+
   e2e:
     name: End-to-end smoke
     runs-on: ubuntu-24.04
