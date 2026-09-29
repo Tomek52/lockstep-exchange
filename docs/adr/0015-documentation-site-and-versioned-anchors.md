@@ -36,6 +36,9 @@ include-markdown rely on.
   build time: root documents to their site pages, existing code paths to
   GitHub URLs. A path that does not exist is left alone so the build fails.
 - Mermaid diagrams use Material's native `pymdownx.superfences` integration.
+- The sources follow GitHub's Markdown dialect, not Python-Markdown's: the
+  hook adds the blank line Python-Markdown needs before a list, and
+  `mdx_truly_sane_lists` accepts the 2-space nested indent.
 - On the site, the hook turns every versioned anchor into a self-link: the
   criterion marker becomes clickable, other anchors show their ID as a small
   label, and the item a link lands on is highlighted

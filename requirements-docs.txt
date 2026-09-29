@@ -7,3 +7,6 @@ pymdown-extensions==12.1
 # Renders README.md, ROADMAP.md and CLAUDE.md (repository root) as site pages
 # and rewrites their relative links (ADR-0015).
 mkdocs-include-markdown-plugin==7.3.0
+# Accepts the 2-space nested-list indent GitHub renders and the sources use
+# (Python-Markdown alone needs 4).
+mdx_truly_sane_lists==1.3

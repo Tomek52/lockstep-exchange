@@ -11,6 +11,14 @@ rewrites such links before MkDocs validates them:
 - a target that does not exist is left untouched, so `validation.links`
   reports it and `mkdocs build --strict` fails.
 
+It also papers over two places where Python-Markdown, which MkDocs uses,
+differs from GitHub's CommonMark and the sources follow GitHub:
+
+- a list needs a blank line before it (otherwise it is glued to the previous
+  paragraph): `_separate_lists` inserts one outside code fences;
+- nested blocks need a 4-space indent: `mdx_truly_sane_lists` in mkdocs.yml
+  accepts the 2-space indent used here.
+
 It also makes versioned anchors visible on the site. In the sources an anchor
 is an empty `<a id="...">`, which gives a reader who followed a link nothing to
 see. Each one becomes a self-link: a criterion's `**[id vN]**` marker is
@@ -36,8 +44,27 @@ ROOT_PAGES = {
 _LINK = re.compile(r"(\]\()(<[^>]+>|[^)\s]+)((?:\s+\"[^\"]*\")?\))")
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+_LIST_ITEM = re.compile(r"^\s*(?:\d+\.|[-*+])\s+\S")
 _CODE_SPAN = re.compile(r"(`+).*?\1")
 _ANCHOR = re.compile(r'<a id="([a-z0-9-]+)-v(\d+)"></a>(\*\*\[[^\]]*\]\*\*)?')
+
+
+def _separate_lists(lines: list[str]) -> list[str]:
+    """Adds the blank line Python-Markdown needs before a list (GitHub does not)."""
+    out: list[str] = []
+    in_fence = in_list = False
+    for line in lines:
+        if _FENCE.match(line):
+            in_fence = not in_fence
+        elif not in_fence:
+            if not line.strip():
+                in_list = False
+            elif _LIST_ITEM.match(line):
+                if not in_list and out and out[-1].strip():
+                    out.append("\n")
+                in_list = True
+        out.append(line)
+    return out
 
 
 def _decorate_anchor(m: re.Match[str]) -> str:
@@ -94,7 +121,7 @@ def on_page_markdown(markdown: str, page, config, files) -> str:  # noqa: ANN001
 
     out: list[str] = []
     in_fence = False
-    for line in markdown.splitlines(keepends=True):
+    for line in _separate_lists(markdown.splitlines(keepends=True)):
         if _FENCE.match(line):
             in_fence = not in_fence
         if not in_fence:
