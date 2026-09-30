@@ -48,8 +48,9 @@ running tests (especially `--preset tsan`), never for committing.
 For each risk you find, propose (or point to) a test that would expose it:
 a multi-producer stress test, a differential test against `MutexQueue`, or
 a targeted interleaving with a barrier. Run the existing concurrency suites
-under TSan; the script prints only the verdict and any race report, and keeps
-the full log in `build/logs/`:
+under TSan; the script prints the verdict, failed assertions and each
+sanitizer report in full (header to `SUMMARY`, both stacks of a race), and
+keeps the full log in `build/logs/`:
 
 ```bash
 PRESET=tsan .claude/skills/definition-of-done/quick-check.sh            # all TSan tests

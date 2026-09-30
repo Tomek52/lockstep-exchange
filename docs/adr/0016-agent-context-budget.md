@@ -12,16 +12,17 @@ repeated input cheaper, but it still occupies the window and is re-read at a
 fraction of the price each turn. Measured on this repository (2026-09-30):
 
 - Claude Code injects `CLAUDE.md` into the main session and into every custom
-  subagent before the first turn. A probe of the `verifier` agent quoted it
-  without any tool call; the built-in `Explore` agent does not get it.
-  Nevertheless the `developer`, `analyst`, `architect` and
-  `concurrency-auditor` instructions told the agent to Read `CLAUDE.md`,
-  which put a second copy (about 12 KB) into the context of every run.
+  subagent before the first turn: probed without tools, the `verifier` agent
+  quoted section 6 verbatim, while the built-in `Explore` agent reported
+  that it had no `CLAUDE.md` in its context. Nevertheless the `developer`,
+  `analyst`, `architect` and `concurrency-auditor` instructions told the
+  agent to Read `CLAUDE.md`, which put a second copy (12.6 KB) into the
+  context of every run.
 - A green `ctest --preset debug` prints about 35 KB (279 lines, one per test
   and gtest's banner); the agents' fast loop ran it raw after every step, and
   the reviewers reran full builds to check claims.
-- About 2.5 KB of `CLAUDE.md` was the versioned-anchor rules of ADR-0015,
-  which only matter when documentation is edited.
+- 2.0 KB of `CLAUDE.md` was the versioned-anchor rules of ADR-0015, which
+  only matter when documentation is edited.
 - The `analyst` read all of `ai-workflow.md` (10 KB) to use one section.
 
 Quality must not pay for the savings: the rules an agent follows have to
@@ -41,12 +42,17 @@ reach it at the moment it needs them.
 3. **Path-scoped documentation rules.** The anchor rules move verbatim from
    `CLAUDE.md` to `.claude/rules/documentation.md`, with `paths:` covering
    `docs/**/*.md`, `README.md`, `ROADMAP.md` and `CLAUDE.md`. Claude Code loads
-   the file when an agent reads a matching file, which editing requires
-   anyway. `CLAUDE.md` keeps a pointer and the two rules whose violation is
+   the file when an agent reads a matching file: editing an existing file
+   requires reading it, and the agents that create documents (`analyst`,
+   `architect`) read the task or ADR index first. Probed in a subagent
+   (`verifier`), the rule was absent before it read
+   `docs/tasks/004-risk-controls-in-domain.md` and present right after.
+   `CLAUDE.md` (now 11.3 KB)
+   keeps a pointer and the two rules whose violation is
    hardest to undo (never change an anchor ID except by bumping it; never fix
    a broken versioned link by reverting or removing it). The `code-guard`
-   reads the rule file explicitly when a diff touches Markdown, because
-   reviewing a diff reads no documentation file.
+   and the `verifier` read the rule file explicitly when a diff touches
+   Markdown, because working from a diff reads no documentation file.
 4. **Narrow reads and reuse.** Agents read the section they use, not the
    whole document. Review findings go back to the `developer` agent that
    wrote the code, through `SendMessage`, instead of to a fresh one. Prompts
@@ -81,7 +87,9 @@ reach it at the moment it needs them.
   docs check (`scripts/docs-check.sh`) still catches malformed anchors and
   broken versioned links, but not a missing version bump.
 - `.claude/rules/` is not part of the MkDocs site, so its links are not
-  checked by the strict build; `/docs-sync` greps it explicitly.
+  checked by the strict build; `/docs-sync` greps it explicitly. Readers of
+  the site see the anchor rules in ADR-0015, which holds them in full, and
+  no longer on the agent-rules page.
 - New agent or skill instructions follow the same rules: point to
   `CLAUDE.md` instead of asking for it to be read, use `quick-check.sh` for
   the inner loop, and keep raw logs out of the context.

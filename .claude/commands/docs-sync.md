@@ -8,7 +8,7 @@ argument-hint: "[base ref, default: merge-base with origin/main]"
 Goal: after someone bumped the `-vN` of an anchored item (a task criterion,
 an ADR section, an architecture rule), bring every reference to it up to date
 **without** letting a reference silently keep claiming something the new
-wording no longer says. Rules: CLAUDE.md, "Documentation"; decision:
+wording no longer says. Rules: `.claude/rules/documentation.md`; decision:
 `docs/adr/0015-documentation-site-and-versioned-anchors.md`.
 
 Base for "old wording": `$ARGUMENTS` if given, else

@@ -29,7 +29,10 @@ In short:
 4. Run the conditional checks the script reports as applicable: Rust
    (fmt, clippy `-D warnings`, tests), proto (`scripts/check-proto.sh`),
    e2e (`scripts/e2e-smoke.sh`).
-5. Check the documentation items by reading, not by running: ROADMAP
+5. Check the documentation items by reading, not by running. If the diff
+   touches Markdown, Read `.claude/rules/documentation.md` first. It loads
+   by itself only when a documentation file is read, and `docs-check.sh`
+   cannot see a missing `-vN` bump. Then check the ROADMAP
    checkbox, README status, ADR if a decision was made, no `TODO` without a
    task number (`git diff origin/main...HEAD | grep -n 'TODO'`).
 
