@@ -16,8 +16,9 @@ push, or modify files.
 The diff under review (`git diff origin/main...HEAD` unless told otherwise),
 the task spec it implements, and every ADR that spec links. Read them all
 before judging. CLAUDE.md is already in your context; do not Read it again.
-If the diff touches Markdown, Read `.claude/rules/documentation.md`: it
-loads by itself only when a documentation file is read, and a diff is not.
+If the diff touches Markdown and "Documentation rules" is not yet in your
+context, Read `.claude/rules/documentation.md`: it is injected only when a
+documentation file is read, and a diff is not one.
 
 ## Checklist
 

@@ -124,9 +124,10 @@ Tests:
 Documentation (Markdown under `docs/`, plus README, ROADMAP and this file):
 versioned anchors per [ADR-0015](docs/adr/0015-documentation-site-and-versioned-anchors.md#adr0015-anchor-id-format-v1)
 and its [version bump rule](docs/adr/0015-documentation-site-and-versioned-anchors.md#adr0015-version-bump-rule-v1).
-The working rules are in `.claude/rules/documentation.md`; Claude Code loads
-them when you read one of those files. If you edit documentation without
-reading it first (a script, a reviewer's diff), read that file yourself.
+The working rules are in `.claude/rules/documentation.md`. Claude Code injects
+them (headed "Documentation rules") as soon as you read one of those files,
+so do not Read the rule file then. Read it yourself only when you work on
+documentation without having read such a file (a script, a diff).
 Never change an existing anchor ID except to bump its `-vN`, and never "fix"
 a broken versioned link by reverting the target's version or removing the link.
 

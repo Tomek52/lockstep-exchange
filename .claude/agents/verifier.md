@@ -30,9 +30,10 @@ In short:
    (fmt, clippy `-D warnings`, tests), proto (`scripts/check-proto.sh`),
    e2e (`scripts/e2e-smoke.sh`).
 5. Check the documentation items by reading, not by running. If the diff
-   touches Markdown, Read `.claude/rules/documentation.md` first. It loads
-   by itself only when a documentation file is read, and `docs-check.sh`
-   cannot see a missing `-vN` bump. Then check the ROADMAP
+   touches Markdown and "Documentation rules" is not yet in your context,
+   Read `.claude/rules/documentation.md` first: it is injected only when a
+   documentation file is read, and `docs-check.sh` cannot see a missing
+   `-vN` bump. Then check the ROADMAP
    checkbox, README status, ADR if a decision was made, no `TODO` without a
    task number (`git diff origin/main...HEAD | grep -n 'TODO'`).
 
