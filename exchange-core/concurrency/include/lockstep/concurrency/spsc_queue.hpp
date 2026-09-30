@@ -7,6 +7,7 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -18,8 +19,8 @@ namespace detail {
 template <typename>
 inline constexpr bool not_implemented = false;
 
-/// Smallest power of two >= n, and >= 2 (a 1-slot ring cannot distinguish
-/// "full" from "empty" under the tail - head == capacity rule below).
+// Smallest power of two >= n, and at least 2 (the minimum task 005's spec
+// sets; with monotonic indices a 1-slot ring would also work).
 [[nodiscard]] constexpr std::size_t round_up_capacity(std::size_t n) noexcept {
     if (n <= 2) {
         return 2;
@@ -41,6 +42,11 @@ inline constexpr bool not_implemented = false;
 /// queue (e.g. joined). try_push() leaves `value` untouched when it fails.
 template <typename T>
 class SpscQueue {
+    // try_pop() publishes head_ before returning its local; a throwing move
+    // there (no NRVO) would lose an element already removed from the ring.
+    static_assert(std::is_nothrow_move_constructible_v<T>,
+                  "SpscQueue requires a nothrow-move-constructible T");
+
 public:
     using value_type = T;
     static constexpr bool multi_producer = false;
@@ -84,7 +90,8 @@ public:
                 return false;  // still full: `value` untouched, caller may retry
             }
         }
-        std::construct_at(std::launder(reinterpret_cast<T*>(slots_[tail & mask_].storage.data())),
+        // No std::launder here: the slot holds no live T until construct_at.
+        std::construct_at(reinterpret_cast<T*>(slots_[tail & mask_].storage.data()),
                           std::move(value));
         // release: pairs with the consumer's acquire load of tail_ in
         // try_pop(), publishing the constructed element before the index

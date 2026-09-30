@@ -3,7 +3,6 @@
 // wrap-around / move-only edge cases called out in task 005.
 #include "lockstep/concurrency/spsc_queue.hpp"
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -37,9 +36,14 @@ TEST(SpscQueueTest, StressOneProducerOneConsumerFiveMillionSequentialInts) {
     constexpr std::size_t total = 5'000'000;
     SpscQueue<std::size_t> queue{1024};
 
-    std::jthread producer([&queue] {
+    // The stop token lets a failed assertion below end the test instead of
+    // leaving the producer spinning on a full queue until the ctest timeout.
+    std::jthread producer([&queue](const std::stop_token& stop) {
         for (std::size_t i = 0; i < total; ++i) {
             while (!queue.try_push(std::size_t{i})) {
+                if (stop.stop_requested()) {
+                    return;
+                }
                 std::this_thread::yield();
             }
         }
@@ -49,6 +53,37 @@ TEST(SpscQueueTest, StressOneProducerOneConsumerFiveMillionSequentialInts) {
     while (expected < total) {
         if (auto item = queue.try_pop()) {
             ASSERT_EQ(*item, expected);
+            ++expected;
+        }
+    }
+    EXPECT_EQ(expected, total);
+}
+
+// A non-trivial T at capacity 2: every operation sits on the full/empty
+// boundary, and the consumer's destroy_at must happen before it publishes
+// head_. With a trivially destructible T (above), TSan cannot see a slot
+// being reused while its old element is still being destroyed.
+TEST(SpscQueueTest, StressNonTrivialTypeAtCapacityTwo) {
+    constexpr std::size_t total = 1'000'000;
+    SpscQueue<std::unique_ptr<std::size_t>> queue{2};
+
+    std::jthread producer([&queue](const std::stop_token& stop) {
+        for (std::size_t i = 0; i < total; ++i) {
+            auto item = std::make_unique<std::size_t>(i);
+            while (!queue.try_push(std::move(item))) {
+                if (stop.stop_requested()) {
+                    return;
+                }
+                std::this_thread::yield();
+            }
+        }
+    });
+
+    std::size_t expected = 0;
+    while (expected < total) {
+        if (auto item = queue.try_pop()) {
+            ASSERT_NE(*item, nullptr);
+            ASSERT_EQ(**item, expected);
             ++expected;
         }
     }
@@ -87,16 +122,29 @@ TEST(SpscQueueTest, DifferentialAgainstMutexQueue) {
 }
 
 TEST(SpscQueueTest, LifetimeDestroysElementsStillQueuedOnDestruction) {
-    static std::atomic<int> constructions{0};
-    static std::atomic<int> destructions{0};
+    // Single-threaded test: plain counters. `live` catches a leak and a
+    // double destroy separately, which equal totals alone could hide.
+    static int constructions = 0;
+    static int destructions = 0;
+    static int live = 0;
 
     struct Tracked {
-        Tracked() { constructions.fetch_add(1, std::memory_order_relaxed); }
+        Tracked() {
+            ++constructions;
+            ++live;
+        }
         Tracked(const Tracked&) = delete;
         Tracked& operator=(const Tracked&) = delete;
-        Tracked(Tracked&&) noexcept { constructions.fetch_add(1, std::memory_order_relaxed); }
+        Tracked(Tracked&&) noexcept {
+            ++constructions;
+            ++live;
+        }
         Tracked& operator=(Tracked&&) = delete;
-        ~Tracked() { destructions.fetch_add(1, std::memory_order_relaxed); }
+        ~Tracked() {
+            ++destructions;
+            --live;
+            EXPECT_GE(live, 0) << "double destroy";
+        }
     };
 
     {
@@ -109,7 +157,8 @@ TEST(SpscQueueTest, LifetimeDestroysElementsStillQueuedOnDestruction) {
         ASSERT_TRUE(popped.has_value());
     }
 
-    EXPECT_EQ(constructions.load(), destructions.load()) << "leak or double destroy";
+    EXPECT_EQ(live, 0) << "leak";
+    EXPECT_EQ(constructions, destructions);
 }
 
 TEST(SpscQueueTest, CapacityRoundsUpToPowerOfTwo) {
@@ -131,7 +180,8 @@ TEST(SpscQueueTest, TryPushOnFullQueueLeavesArgumentIntact) {
 
     auto extra = std::make_unique<int>(42);
     EXPECT_FALSE(queue.try_push(std::move(extra)));
-    ASSERT_NE(extra, nullptr);  // NOLINT(bugprone-use-after-move)
+    // NOLINTNEXTLINE(bugprone-use-after-move): try_push leaves it intact on failure
+    ASSERT_NE(extra, nullptr);
     EXPECT_EQ(*extra, 42);
 }
 
