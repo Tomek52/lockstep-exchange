@@ -10,7 +10,7 @@ or cancel the remainder according to order type and time in force.
 
 - Domain model and target rules:
   [docs/architecture/domain-model.md](../architecture/domain-model.md)
-  (["Matching rules"](../architecture/domain-model.md#arch-matching-rules-v1)).
+  (["Matching rules"](../architecture/domain-model.md#arch-matching-rules-v2)).
 - [ADR-0004](../adr/0004-deterministic-replay-via-per-shard-journal.md): the
   output must be [a pure function of the command sequence](../adr/0004-deterministic-replay-via-per-shard-journal.md#adr0004-determinism-property-v1).
 - [ADR-0005](../adr/0005-fixed-point-prices-and-quantities.md): [integer ticks](../adr/0005-fixed-point-prices-and-quantities.md#adr0005-price-integer-ticks-v1)

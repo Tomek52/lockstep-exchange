@@ -22,7 +22,7 @@ The exchange actually trades.
 - [x] [001 Order book storage: pooled FIFO, O(1) cancel](docs/tasks/001-order-book-storage.md)
 - [x] [002 Price-time matching for limit and market orders](docs/tasks/002-matching-limit-market.md)
 - [x] [003 Modify (cancel/replace) and duplicate client ids](docs/tasks/003-cancel-modify-duplicates.md)
-- [ ] [004 Risk controls: block, kill switch, link policy](docs/tasks/004-risk-controls-in-domain.md)
+- [x] [004 Risk controls: block, kill switch, link policy](docs/tasks/004-risk-controls-in-domain.md)
 
 ## M2: Lock-free runtime
 

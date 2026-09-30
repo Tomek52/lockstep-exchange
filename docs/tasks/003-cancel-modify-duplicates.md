@@ -8,7 +8,7 @@ that reuse a client order id still live for the same trader.
 ## Context
 
 - Rules: [domain-model.md](../architecture/domain-model.md)
-  (["Matching rules"](../architecture/domain-model.md#arch-matching-rules-v1)).
+  (["Matching rules"](../architecture/domain-model.md#arch-matching-rules-v2)).
 - `ShardEngine::on(const ModifyOrder&, ...)` in
   `exchange-core/domain/src/shard_engine.cpp` validates, checks
   existence/ownership, and returns `UnknownOrder` (`TODO(task-003)`).

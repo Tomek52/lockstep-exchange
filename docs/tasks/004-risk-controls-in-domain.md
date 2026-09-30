@@ -48,7 +48,8 @@ replay reproduces it.
 | `RiskLinkStatus{c}` | set link | none |
 
 [Idempotency](../adr/0013-risk-feedback-loop.md#adr0013-idempotency-v1): blocking an already-blocked trader or engaging an engaged kill
-switch changes nothing and still emits `RiskCommandApplied`.
+switch changes nothing and still emits `RiskCommandApplied`. A redundant
+disengage (kill switch already off) likewise emits only `RiskCommandApplied`.
 
 `ModifyOrder` is also gated by `check_new_order`. `CancelOrder` is always
 allowed, even when halted.
@@ -75,9 +76,9 @@ Tests in `exchange-core/tests/domain/risk_controls_test.cpp`:
 6. <a id="t004-duplicate-block-idempotent-v1"></a>**[t004-duplicate-block-idempotent v1]**
    [Duplicate `BlockTrader`](../adr/0013-risk-feedback-loop.md#adr0013-idempotency-v1) with the same id: second application changes
    nothing, but still acks.
-7. <a id="t004-risk-ack-test-still-passes-v1"></a>**[t004-risk-ack-test-still-passes v1]**
-   The existing test
-   `ShardEngineTest.RiskCommandsAreAcknowledgedPerShard` still passes.
+7. <a id="t004-risk-ack-test-still-passes-v2"></a>**[t004-risk-ack-test-still-passes v2]**
+   The existing test `ShardEngineTest.RiskCommandsAreAcknowledgedPerShard`
+   still passes, updated to the full event vector.
 8. <a id="t004-risk-state-nolint-removed-v1"></a>**[t004-risk-state-nolint-removed v1]**
    The `NOLINTBEGIN/END` block in `risk_state.cpp` is gone; clang-tidy is clean.
 9. <a id="t004-presets-pass-v1"></a>**[t004-presets-pass v1]**

@@ -1,32 +1,46 @@
 #include "lockstep/domain/risk_state.hpp"
 
+#include <algorithm>
+
 namespace lockstep::domain {
 
-// SKELETON: every method below is a deliberate no-op so that the walking
-// skeleton can wire risk commands end to end. The real behaviour, and the tests
-// that pin it down, are specified in docs/tasks/004-risk-controls-in-domain.md.
-// NOLINTBEGIN(readability-convert-member-functions-to-static) - stubs until task 004
-
-std::expected<void, RejectReason> RiskState::check_new_order(TraderId /*trader*/) const noexcept {
-    return {};  // TODO(task-004): blocked trader, kill switch, fail-closed link policy
+std::expected<void, RejectReason> RiskState::check_new_order(TraderId trader) const noexcept {
+    if (halted_) {
+        return std::unexpected(RejectReason::TradingHalted);
+    }
+    if (is_blocked(trader)) {
+        return std::unexpected(RejectReason::TraderBlocked);
+    }
+    if (policy_ == RiskLinkPolicy::FailClosed && !link_connected_) {
+        return std::unexpected(RejectReason::RiskUnavailable);
+    }
+    return {};
 }
 
-void RiskState::block(TraderId /*trader*/) {}  // TODO(task-004)
-
-void RiskState::unblock(TraderId /*trader*/) {}  // TODO(task-004)
-
-void RiskState::set_kill_switch(bool /*engaged*/) noexcept {}  // TODO(task-004)
-
-void RiskState::set_link_connected(bool /*connected*/) noexcept {}  // TODO(task-004)
-
-bool RiskState::is_blocked(TraderId /*trader*/) const noexcept {
-    return false;  // TODO(task-004)
+void RiskState::block(TraderId trader) {
+    const auto it = std::ranges::lower_bound(blocked_, trader);
+    if (it == blocked_.end() || *it != trader) {
+        blocked_.insert(it, trader);
+    }
 }
 
-bool RiskState::halted() const noexcept {
-    return false;  // TODO(task-004)
+void RiskState::unblock(TraderId trader) {
+    const auto it = std::ranges::lower_bound(blocked_, trader);
+    if (it != blocked_.end() && *it == trader) {
+        blocked_.erase(it);
+    }
 }
 
-// NOLINTEND(readability-convert-member-functions-to-static)
+void RiskState::set_kill_switch(bool engaged) noexcept {
+    halted_ = engaged;
+}
+
+void RiskState::set_link_connected(bool connected) noexcept {
+    link_connected_ = connected;
+}
+
+bool RiskState::is_blocked(TraderId trader) const noexcept {
+    return std::ranges::binary_search(blocked_, trader);
+}
 
 }  // namespace lockstep::domain
