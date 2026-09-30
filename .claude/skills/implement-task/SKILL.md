@@ -20,7 +20,8 @@ their roles. `$ARGUMENTS` is the task number.
 
 ## 1. Read (no code yet)
 
-`CLAUDE.md`, the spec, and **every ADR the spec links**. If the spec is
+The spec and **every ADR the spec links** (CLAUDE.md is already in your
+context). If the spec is
 ambiguous, contradicts an ADR, or needs a decision the spec does not make,
 stop and ask. A needed decision goes to the `architect` agent as an ADR,
 not into the code.
@@ -34,19 +35,24 @@ executable). Build and run; **copy the failure output**, it goes in the PR.
 ## 3. Implement (developer)
 
 Smallest change that passes, within "Files expected to change". Iterate
-with the fast loop:
+with the fast loop, which prints one line when green and only the errors
+when red:
 
 ```bash
-cmake --build --preset debug && ctest --preset debug
+.claude/skills/definition-of-done/quick-check.sh            # or: ... -R <Suite>
 ```
 
 Delegate to the `developer` agent if the work is large or you want a fresh
-context; give it the spec path and the rules above.
+context. Give it the spec path and any decision made in this conversation;
+it already has CLAUDE.md and reads the spec and ADRs itself, so do not paste
+them into the prompt.
 
 ## 4. Review
 
 - Run the `code-guard` agent on the diff. Fix every blocker and major; fix
-  plainly correct nits; answer the rest in the PR.
+  plainly correct nits; answer the rest in the PR. If a `developer` agent
+  wrote the code, send it the findings with `SendMessage` instead of
+  starting a new one: it still has the spec and the code in its context.
 - If the change touches `concurrency/`, atomics, threads, the shard runtime
   or the publisher, also run the `concurrency-auditor` agent.
 

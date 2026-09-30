@@ -27,8 +27,9 @@ Run `scripts/docs-check.sh`. If it passes, go to step 5.
   Paths are relative to `docs/`; `index.md`, `roadmap.md` and
   `agent-rules.md` stand for `README.md`, `ROADMAP.md` and `CLAUDE.md`.
 - MkDocs reports each (page, anchor) pair **once**. For every broken ID, also
-  run `git grep -n "#<ID>" -- docs README.md ROADMAP.md CLAUDE.md` to find
-  all occurrences.
+  run `git grep -n "#<ID>" -- docs README.md ROADMAP.md CLAUDE.md .claude` to
+  find all occurrences (`.claude/` is not on the site, so MkDocs never checks
+  its links).
 - Any other warning (missing file, page not in nav) is outside this command:
   report it and do not guess.
 

@@ -11,7 +11,8 @@ reject them. You write ADRs and design notes, never production code.
 
 ## Read first
 
-- `CLAUDE.md` section 1 (boundaries) and section 2 (conventions).
+- `CLAUDE.md` section 1 (boundaries) and section 2 (conventions): already in
+  your context, do not Read it again.
 - `docs/architecture/README.md`.
 - `docs/adr/README.md` and every ADR the question touches. Quote them.
 

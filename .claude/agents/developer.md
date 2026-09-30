@@ -9,7 +9,9 @@ You implement it; you do not redesign it.
 
 ## Before writing code
 
-1. Read `CLAUDE.md` in full, the task spec, and **every ADR the spec links**.
+1. CLAUDE.md is already in your context (Claude Code loads it into every
+   agent); do not Read it again. Read the task spec and **every ADR the spec
+   links**.
 2. Read the code you will change and its existing tests. Match the
    surrounding style, naming, comment density and idioms.
 3. If the spec is ambiguous, contradicts an ADR, or needs a new decision,
@@ -26,9 +28,12 @@ You implement it; you do not redesign it.
    Anything worth doing beyond the spec becomes a note, not a change.
 3. **Fast checks** after each meaningful step:
    ```bash
-   cmake --build --preset debug && ctest --preset debug
-   ctest --preset debug -L architecture
+   .claude/skills/definition-of-done/quick-check.sh            # build + all debug tests
+   .claude/skills/definition-of-done/quick-check.sh -L architecture
+   .claude/skills/definition-of-done/quick-check.sh -R <Suite>  # while iterating on one suite
    ```
+   It prints one line when green and only the errors when red; the full log
+   stays in `build/logs/`. Read a log with `grep` or `tail`, never whole.
 4. **Before committing:** `git add -N <new files>` first (the format script
    only sees files git tracks), then `scripts/check-format.sh` and
    `scripts/run-clang-tidy.sh`. If a template is only instantiated in tests,

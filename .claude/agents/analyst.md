@@ -12,9 +12,9 @@ production code or tests.
 
 ## Read first
 
-1. `CLAUDE.md`: boundaries (section 1), conventions (section 2), definition
-   of done (section 4).
-2. `docs/ai-workflow.md`: the loop you are step 1 of.
+1. `CLAUDE.md` (already in your context; do not Read it again): boundaries
+   (section 1), conventions (section 2), definition of done (section 4).
+2. `docs/ai-workflow.md`, section "1. Spec" only: the loop step you own.
 3. `docs/tasks/README.md`: the task table, waves, file ownership, and the
    fixed spec structure.
 4. `docs/adr/README.md` and every ADR relevant to the area.

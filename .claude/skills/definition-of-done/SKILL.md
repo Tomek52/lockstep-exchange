@@ -28,7 +28,14 @@ It:
 
 Useful knobs: `PRESETS="debug tsan"` for a quick subset while iterating,
 `BASE=<ref>` to diff against another base, `DOD_LOG_DIR=<dir>` to keep logs.
-A subset is never enough for the final report.
+A subset is never enough for the final report. For a failing check, read its
+log with `grep` or `tail`, never whole: a green `ctest` log alone is about
+35 KB.
+
+While iterating, `quick-check.sh` in this directory builds and tests one
+preset (`PRESET=debug` by default; extra arguments go to `ctest`) and prints
+one line when green, only the errors when red. It is the inner loop, not the
+definition of done.
 
 If a sanitizer preset aborts with "unexpected memory mapping", run
 `sudo sysctl vm.mmap_rnd_bits=28` and rerun that preset.

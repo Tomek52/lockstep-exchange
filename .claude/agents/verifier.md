@@ -23,7 +23,9 @@ In short:
    (`scripts/check-format.sh` lists files with `git ls-files`; an untracked
    file is silently skipped. This has already let a violation reach CI.)
 3. Run `.claude/skills/definition-of-done/run-dod.sh`, which builds and tests
-   every preset and runs the quality gates, then read its summary.
+   every preset and runs the quality gates, then read its summary. It keeps
+   each check's log in a file; for a failure, read that log with `grep` or
+   `tail`, never whole.
 4. Run the conditional checks the script reports as applicable: Rust
    (fmt, clippy `-D warnings`, tests), proto (`scripts/check-proto.sh`),
    e2e (`scripts/e2e-smoke.sh`).
