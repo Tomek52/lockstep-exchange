@@ -21,6 +21,7 @@ decision; a new ADR supersedes it and the old one's status says so.
 | [0013](0013-risk-feedback-loop.md) | Risk feedback loop semantics | Accepted |
 | [0014](0014-testing-strategy.md) | Testing strategy | Accepted |
 | [0015](0015-documentation-site-and-versioned-anchors.md) | Documentation site (MkDocs) and versioned requirement anchors | Proposed |
+| [0016](0016-agent-context-budget.md) | Agent context budget: no duplicate loading, quiet logs, path-scoped rules | Proposed |
 
 To add one: copy the structure of any ADR, take the next number, add it to
 this table, and link it from the code or task spec that motivated it.
