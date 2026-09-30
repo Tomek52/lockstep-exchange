@@ -18,7 +18,10 @@ description: Repository conventions for driving a Lockstep pull request to green
 | `Docs (strict build)` | `scripts/docs-check.sh` (needs `requirements-docs.txt`; on a broken versioned anchor run `/docs-sync`) |
 
 Always reproduce the failure locally first, then show the same command
-passing before pushing.
+passing before pushing. For the C++ jobs,
+`PRESET=<preset> .claude/skills/definition-of-done/quick-check.sh [-R <Suite>]` runs the same
+build and tests but prints only the verdict and the errors; the full log is
+in `build/logs/`.
 
 ## Known failure causes
 

@@ -18,7 +18,9 @@ title) and read it with its ADRs.
 
 ## 2. Review
 
-Run the `code-guard` agent on the target. Also run the
+Run the `code-guard` agent on the target. Give it the diff range, the spec
+path and the PR description if there is one; it reads the rest itself, so do
+not paste the diff or the ADRs into the prompt. Also run the
 `concurrency-auditor` agent in parallel when the diff touches any of:
 `exchange-core/concurrency/`, `std::atomic`, `std::thread`/`jthread`,
 `app/src/shard_runtime.cpp`, the publisher, or idle strategies.

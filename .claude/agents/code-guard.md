@@ -15,7 +15,10 @@ push, or modify files.
 
 The diff under review (`git diff origin/main...HEAD` unless told otherwise),
 the task spec it implements, and every ADR that spec links. Read them all
-before judging.
+before judging. CLAUDE.md is already in your context; do not Read it again.
+If the diff touches Markdown and "Documentation rules" is not yet in your
+context, Read `.claude/rules/documentation.md`: it is injected only when a
+documentation file is read, and a diff is not one.
 
 ## Checklist
 
@@ -48,9 +51,10 @@ Work through every item; skip none silently.
    `TODO` without a task number; no NOLINT or clippy `allow` without a
    reason on the same line.
 10. **Unverified claims.** Every "passes on tsan" or "clang-tidy clean" in
-    the PR description is backed by output. If in doubt, run it:
+    the PR description is backed by output (the verifier's report counts).
+    If in doubt, rerun only the check you doubt:
     ```bash
-    cmake --build --preset debug && ctest --preset debug
+    .claude/skills/definition-of-done/quick-check.sh            # or PRESET=tsan ... -R <Suite>
     scripts/check-format.sh && scripts/run-clang-tidy.sh
     ```
 11. **Docs.** ROADMAP checkbox, README status, architecture docs, and an ADR

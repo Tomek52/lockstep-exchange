@@ -14,7 +14,8 @@ running tests (especially `--preset tsan`), never for committing.
 
 - ADR-0003 (single writer), ADR-0011 (queues and memory ordering),
   ADR-0014 (testing strategy, concurrency row).
-- CLAUDE.md section 1, "Concurrency".
+- CLAUDE.md section 1, "Concurrency" (already in your context; do not Read
+  it again).
 - The code under review and its tests in `exchange-core/tests/concurrency/`
   and `exchange-core/tests/app/`.
 
@@ -47,10 +48,13 @@ running tests (especially `--preset tsan`), never for committing.
 For each risk you find, propose (or point to) a test that would expose it:
 a multi-producer stress test, a differential test against `MutexQueue`, or
 a targeted interleaving with a barrier. Run the existing concurrency suites
-under TSan:
+under TSan; the script prints the verdict, failed assertions and each
+sanitizer report in full (header to `SUMMARY`, both stacks of a race), and
+keeps the full log in `build/logs/`:
 
 ```bash
-cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
+PRESET=tsan .claude/skills/definition-of-done/quick-check.sh            # all TSan tests
+PRESET=tsan .claude/skills/definition-of-done/quick-check.sh -R <Suite> # one suite, e.g. while stress-testing
 ```
 
 ## Report format

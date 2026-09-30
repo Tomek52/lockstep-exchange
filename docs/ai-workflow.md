@@ -133,9 +133,20 @@ volume or procedure (implementing a precise spec, running the checks). The
 developer and its reviewers deliberately run on different models, so a
 blind spot of one is less likely to pass the other.
 
+Context budget ([ADR-0016](adr/0016-agent-context-budget.md)): every agent
+starts with an empty context and pays for whatever enters it on every later
+turn. CLAUDE.md is loaded into each agent automatically, so no instruction
+asks for it to be read again. Build and test output stays in log files
+(`quick-check.sh` for the inner loop, `run-dod.sh` for the definition of
+done), and only the verdict and the errors reach the agent. The
+documentation rules live in `.claude/rules/documentation.md` and load when
+an agent reads a documentation file. Review findings go back to the same
+`developer` agent with `SendMessage` rather than to a fresh one.
+
 Rules for changing them: an agent's instructions may only point to
-CLAUDE.md, ADRs and this document, never restate a rule differently. When a
-rule changes, change it at its source and check the agents still agree.
+CLAUDE.md, `.claude/rules/`, ADRs and this document, never restate a rule
+differently. When a rule changes, change it at its source and check the
+agents still agree.
 
 ## Prompt template for executing a task
 

@@ -8,7 +8,7 @@ argument-hint: "[base ref, default: merge-base with origin/main]"
 Goal: after someone bumped the `-vN` of an anchored item (a task criterion,
 an ADR section, an architecture rule), bring every reference to it up to date
 **without** letting a reference silently keep claiming something the new
-wording no longer says. Rules: CLAUDE.md, "Documentation"; decision:
+wording no longer says. Rules: `.claude/rules/documentation.md`; decision:
 `docs/adr/0015-documentation-site-and-versioned-anchors.md`.
 
 Base for "old wording": `$ARGUMENTS` if given, else
@@ -27,8 +27,9 @@ Run `scripts/docs-check.sh`. If it passes, go to step 5.
   Paths are relative to `docs/`; `index.md`, `roadmap.md` and
   `agent-rules.md` stand for `README.md`, `ROADMAP.md` and `CLAUDE.md`.
 - MkDocs reports each (page, anchor) pair **once**. For every broken ID, also
-  run `git grep -n "#<ID>" -- docs README.md ROADMAP.md CLAUDE.md` to find
-  all occurrences.
+  run `git grep -n "#<ID>" -- docs README.md ROADMAP.md CLAUDE.md .claude` to
+  find all occurrences (`.claude/` is not on the site, so MkDocs never checks
+  its links).
 - Any other warning (missing file, page not in nav) is outside this command:
   report it and do not guess.
 
