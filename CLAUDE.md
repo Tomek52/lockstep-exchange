@@ -121,6 +121,34 @@ Tests:
 - Anything linking gRPC or protobuf must be labelled `grpc`, which keeps it
   out of the TSan run ([ADR-0007](docs/adr/0007-dependency-management-system-packages.md)).
 
+Documentation (Markdown under `docs/`, plus README, ROADMAP and this file),
+[ADR-0015](docs/adr/0015-documentation-site-and-versioned-anchors.md):
+- **Anchor IDs** have the [format](docs/adr/0015-documentation-site-and-versioned-anchors.md#adr0015-anchor-id-format-v1)
+  `<doc>-<slug>-v<N>`: `<doc>` is `tNNN` (task spec), `adrNNNN` (ADR) or
+  `arch` (`docs/architecture/`); the slug is 1–6 kebab-case words saying
+  *what* is required, never a list position; `N` is the content version.
+  Examples: `t004-blocked-trader-rejected-v1`, `adr0013-fail-closed-policy-v1`.
+- An acceptance criterion starts with its anchor and a visible marker:
+  `1. <a id="t004-blocked-trader-rejected-v1"></a>**[t004-blocked-trader-rejected v1]**`.
+  Headings and other referenced items get only the anchor, first thing in
+  the line: `## <a id="arch-matching-rules-v1"></a>Matching rules`. Use
+  `<a id>`, not `{#id}` (GitHub shows `{#id}` literally).
+- Link to the specific rule (`004-risk-controls-in-domain.md#t004-…-v1`), not
+  to the whole file, whenever the context names one.
+- **Never change an existing ID** except to bump its `-vN`; never reuse a
+  retired ID for different content.
+- **When you change the meaning of an anchored item**, follow the
+  [version bump rule](docs/adr/0015-documentation-site-and-versioned-anchors.md#adr0015-version-bump-rule-v1): bump `-vN` in the
+  anchor *and* the marker, run `scripts/docs-check.sh`, and review every
+  reference it reports (and every other occurrence of the old ID: MkDocs
+  reports each page only once). Move a link to the new version only after
+  checking that the referring text is still true; if it is not, fix that
+  text too (bumping its own version if it is anchored), or stop and ask.
+  `/docs-sync` walks this process. Typo or formatting fixes that keep the
+  meaning do not bump the version.
+- Never "fix" a broken versioned link by reverting the target's version or
+  by removing the link.
+
 ## 3. How to build and test
 
 Everything runs on Ubuntu 24.04 (native, WSL2, or the CI image). First time:
@@ -141,6 +169,9 @@ cd rust && cargo fmt --all -- --check && cargo clippy --all-targets --locked -- 
 scripts/check-format.sh                  # clang-format + rustfmt + buf format (--fix to apply)
 scripts/run-clang-tidy.sh                # clang-tidy over all owned C++ sources
 scripts/check-proto.sh                   # buf lint + breaking check
+scripts/docs-check.sh                    # doc anchors + mkdocs build --strict
+                                         # (first: python3 -m venv .venv-docs &&
+                                         #  .venv-docs/bin/pip install -r requirements-docs.txt)
 
 # Cross-language smoke test (build debug preset and `cargo build` first)
 scripts/e2e-smoke.sh
@@ -167,6 +198,8 @@ explicitly; don't claim a check you did not run.
 - [ ] If `proto/` changed: `scripts/check-proto.sh` passes, and both builds
       compile.
 - [ ] If the wiring changed: `scripts/e2e-smoke.sh` passes.
+- [ ] If documentation changed: `scripts/docs-check.sh` passes, and every
+      anchored item whose meaning changed has its `-vN` bumped.
 - [ ] **An ADR was added** if you made a decision a reasonable engineer could
       have made differently (a new dependency, format, threading rule,
       protocol change).

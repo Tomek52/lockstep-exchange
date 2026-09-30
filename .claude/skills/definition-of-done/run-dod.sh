@@ -97,6 +97,15 @@ else
   skip "check-proto.sh" "proto/ unchanged"
 fi
 
+if grep -qE '^(docs/|README\.md|ROADMAP\.md|CLAUDE\.md|mkdocs\.yml|requirements-docs\.txt|scripts/(docs-check|check-doc-anchors|mkdocs_hooks))' <<<"${changed}"; then
+  log="${log_dir}/docs.log"
+  scripts/docs-check.sh >"${log}" 2>&1
+  code=$?
+  record "docs-check.sh" "${code}" "$(outcome "${code}" "${log}")"
+else
+  skip "docs-check.sh" "docs unchanged"
+fi
+
 if grep -qE '^(exchange-core/main/|exchange-core/adapters/|rust/|proto/|scripts/e2e)' <<<"${changed}"; then
   skip "e2e-smoke.sh" "wiring may have changed: run scripts/e2e-smoke.sh after cargo build"
 else

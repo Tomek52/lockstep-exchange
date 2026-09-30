@@ -23,7 +23,8 @@ It:
 - runs `ctest -L architecture`, `scripts/check-format.sh`,
   `scripts/run-clang-tidy.sh`;
 - runs the Rust and proto checks when `rust/` or `proto/` changed relative to
-  `origin/main`, and tells you when the e2e smoke test applies.
+  `origin/main`, and tells you when the e2e smoke test applies;
+- runs `scripts/docs-check.sh` when documentation changed.
 
 Useful knobs: `PRESETS="debug tsan"` for a quick subset while iterating,
 `BASE=<ref>` to diff against another base, `DOD_LOG_DIR=<dir>` to keep logs.

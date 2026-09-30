@@ -120,7 +120,7 @@ exchange-core/
   bench/  fuzz/
 rust/crates/{lockstep-proto,risk-sentinel,lockstep-loadgen}/
 deploy/                   Dockerfiles, docker-compose.yml
-scripts/                  setup, format, clang-tidy, proto checks, e2e
+scripts/                  setup, format, clang-tidy, proto and docs checks, e2e
 docs/{architecture,adr,tasks}/, docs/ai-workflow.md
 CLAUDE.md                 rules for AI agents in this repo
 ROADMAP.md                milestones → task specs
@@ -172,6 +172,17 @@ GitHub Actions: all 11 jobs passed on the first run after publishing (run 363488
 - [Task backlog](docs/tasks/README.md) and [roadmap](ROADMAP.md).
 - [AI-assisted workflow](docs/ai-workflow.md) and the agent rules in
   [CLAUDE.md](CLAUDE.md).
+
+The same documents render as a searchable site (MkDocs + Material, with
+Mermaid diagrams). Cross-references point at stable, versioned anchors, and
+`scripts/docs-check.sh` fails on any broken link or superseded anchor
+([ADR-0015](docs/adr/0015-documentation-site-and-versioned-anchors.md)):
+
+```bash
+python3 -m venv .venv-docs && .venv-docs/bin/pip install -r requirements-docs.txt
+.venv-docs/bin/mkdocs serve          # http://127.0.0.1:8000
+scripts/docs-check.sh                # anchors + mkdocs build --strict
+```
 
 ## License
 

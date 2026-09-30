@@ -88,7 +88,7 @@ plain copy.
 ([ADR-0008](../adr/0008-error-handling-strategy.md)). Validation is `constexpr`,
 and its boundary cases are `static_assert`ed.
 
-## Matching rules (target behaviour, tasks 001–004)
+## <a id="arch-matching-rules-v2"></a>Matching rules (target behaviour, tasks 001–004)
 
 - **Price-time priority.** Better price first; at equal price, earlier
   sequence first.
@@ -97,7 +97,7 @@ and its boundary cases are `static_assert`ed.
   remainder is cancelled (`CancelReason::ImmediateOrCancel`).
 - **Modify.** Reducing quantity at the same price keeps priority. A price
   change or quantity increase loses priority (cancel/replace).
-- **Duplicate client order ids (task 003).** A NewOrder is rejected
+- **Duplicate client order ids ([task 003](../tasks/003-cancel-modify-duplicates.md#t003-duplicate-client-id-rejected-v1)).** A NewOrder is rejected
   (`RejectReason::DuplicateClientOrderId`) if `(trader, client_order_id)`
   already names an order resting on any book the shard owns; the id is free
   again as soon as that order is filled or cancelled. Each `OrderBook` keeps

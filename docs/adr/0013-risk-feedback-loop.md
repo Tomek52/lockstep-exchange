@@ -14,7 +14,7 @@ an external controller into a deterministic, sharded core raises questions:
 - What happens when the sentinel is down or the stream breaks?
 - What if the sentinel sends the same command twice (reconnects, retries)?
 
-## Decision
+## <a id="adr0013-decision-v1"></a>Decision
 
 **Session.**
 
@@ -25,7 +25,7 @@ an external controller into a deterministic, sharded core raises questions:
 - The sentinel refuses an incompatible protocol major with
   `FAILED_PRECONDITION`.
 
-**Commands become journaled inputs.**
+<a id="adr0013-commands-journaled-v1"></a>**Commands become journaled inputs.**
 
 - The risk client decodes each `RiskCommand` into a domain command
   (`BlockTrader`, `UnblockTrader`, `KillSwitch`).
@@ -40,7 +40,7 @@ an external controller into a deterministic, sharded core raises questions:
 shards and sends one `CommandApplied{command_id}` upstream once every shard
 has applied it (task 014).
 
-**Idempotency.**
+<a id="adr0013-idempotency-v1"></a>**Idempotency.**
 
 - `command_id` is the idempotency key.
 - Blocking an already-blocked trader and engaging an engaged kill switch are
@@ -48,7 +48,7 @@ has applied it (task 014).
 - The sentinel emits each action once per breach, not on every subsequent
   fill (task 015).
 
-**Link status is an input.**
+<a id="adr0013-link-status-input-v1"></a>**Link status is an input.**
 
 - Transitions of the session (accepted → closed) are broadcast as
   `RiskLinkStatus{connected}` commands and journaled.
@@ -56,7 +56,7 @@ has applied it (task 014).
   - **FailOpen** (default): keep trading while the sentinel is unreachable.
     Risk is post-trade; halting the market because a monitor is down is
     worse.
-  - **FailClosed**: reject new orders with `RISK_UNAVAILABLE` while
+  - <a id="adr0013-fail-closed-policy-v1"></a>**FailClosed**: reject new orders with `RISK_UNAVAILABLE` while
     disconnected.
 - Because link status is journaled, replay reproduces exactly which orders
   were rejected under FailClosed.

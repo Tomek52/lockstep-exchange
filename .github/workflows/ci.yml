@@ -118,6 +118,23 @@ jobs:
       # Both code generators must accept the contracts; the cpp and rust jobs
       # compile them, this job fails fast on schema problems.
 
+  docs:
+    name: Docs (strict build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+      - name: Install MkDocs toolchain (pinned)
+        run: pip install -r requirements-docs.txt
+      # Anchor conventions plus `mkdocs build --strict`: a broken link or a
+      # link to a superseded anchor version fails the job (ADR-0015).
+      - name: Check docs
+        run: scripts/docs-check.sh
+
   e2e:
     name: End-to-end smoke
     runs-on: ubuntu-24.04
