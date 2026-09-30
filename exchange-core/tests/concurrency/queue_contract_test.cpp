@@ -28,7 +28,8 @@ static_assert(!MultiProducerQueue<SpscQueue<int>>);
 template <typename Q>
 class QueueContract : public ::testing::Test {};
 
-using AllQueues = ::testing::Types<MutexQueue<std::unique_ptr<int>>>;
+using AllQueues =
+    ::testing::Types<MutexQueue<std::unique_ptr<int>>, SpscQueue<std::unique_ptr<int>>>;
 TYPED_TEST_SUITE(QueueContract, AllQueues);
 
 TYPED_TEST(QueueContract, PopFromEmptyReturnsNothing) {
