@@ -69,8 +69,14 @@ private:
     // (Publisher needs the shards' egress queues, so it cannot be built
     // before shards_; shards need a reference to the publisher's doorbell,
     // so the doorbell cannot live inside Publisher itself).
-    concurrency::Doorbell publisher_doorbell_;
-    Router router_;
+    //
+    // alignas on both this and router_: every shard thread rings this
+    // doorbell, so without separating it from router_ (and the vtable
+    // pointer ahead of it) those cross-thread writes would false-share a
+    // cache line with state the construction-time-only Router and read-mostly
+    // vptr otherwise wouldn't need to bounce (ADR-0011's cache-line rule).
+    alignas(concurrency::cache_line_size) concurrency::Doorbell publisher_doorbell_;
+    alignas(concurrency::cache_line_size) Router router_;
     std::vector<std::unique_ptr<ShardRuntime>> shards_;
     Publisher publisher_;
     std::vector<std::jthread> shard_threads_;

@@ -118,9 +118,12 @@ work" check, never after. `std::stop_callback` rings a thread's doorbell
 when its `stop_token` is requested, so a parked thread also wakes promptly
 on shutdown.
 
-Each `ShardRuntime` exposes a `ShardStats` snapshot (`commands`, `batches`,
-`max_batch`, `parks`) through relaxed atomics, readable from any thread at
-any time; `Engine::shard_stats()` collects every shard's.
+Each `ShardRuntime` exposes `ShardStats` (`commands`, `batches`, `max_batch`,
+`parks`) through relaxed atomics, readable from any thread at any time;
+`Engine::shard_stats()` collects every shard's. The four counters are each
+individually consistent but not a joint snapshot while the shard is still
+running (see the `ShardStats` doc comment) - read them after `Engine::stop()`
+for an exact comparison.
 
 ## Shutdown protocol
 

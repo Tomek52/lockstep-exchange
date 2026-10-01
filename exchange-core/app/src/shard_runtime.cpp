@@ -23,7 +23,11 @@ ShardRuntime::ShardRuntime(const Config& config,
 }
 
 void ShardRuntime::run(const std::stop_token& stop) {
-    RuntimeIdle idle{doorbell_, stop};
+    // parks_stat_ is passed directly rather than synced after each idle()
+    // call: ParkingIdle publishes it at the moment it enters wait(), so a
+    // reader sees "parked" while this thread is still blocked, not only
+    // after it wakes (see ParkingIdle's class comment).
+    RuntimeIdle idle{doorbell_, stop, &parks_stat_};
     // Wakes this thread if it is parked when stop is requested: request_stop()
     // by itself does not touch the doorbell, so a thread idling on empty
     // ingress would otherwise never re-check stop_requested() (ADR-0003's
@@ -31,8 +35,6 @@ void ShardRuntime::run(const std::stop_token& stop) {
     const std::stop_callback wake_on_stop{stop, [this] { doorbell_.ring(); }};
     while (!stop.stop_requested()) {
         idle.idle(poll_once());
-        // relaxed: diagnostic only, see ShardStats's comment.
-        parks_stat_.store(idle.parks(), std::memory_order_relaxed);
     }
     // Producers were stopped before us (Engine shutdown protocol), so draining
     // until empty loses nothing.

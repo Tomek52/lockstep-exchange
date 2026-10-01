@@ -21,6 +21,11 @@ namespace lockstep::app {
 /// the runtime depends on these values, so stats() reads them with relaxed
 /// atomics and may be called from any thread at any time, including while
 /// the shard thread is running (ADR-0011: weakest ordering that is correct).
+/// Each field is individually consistent (its own atomic load), but the four
+/// are not a joint snapshot while the shard is running: it can update one
+/// counter between two of this call's loads, so e.g. `batches * max_batch`
+/// is not guaranteed to bound `commands` exactly until the shard has
+/// stopped and joined. Call after Engine::stop() for an exact read.
 struct ShardStats {
     std::uint64_t commands{0};
     std::uint64_t batches{0};
@@ -78,8 +83,14 @@ private:
     std::size_t max_batch_;
     IngressQueue ingress_;
     EgressQueue egress_;
-    concurrency::Doorbell doorbell_;
-    concurrency::Doorbell& publisher_doorbell_;
+    // alignas on both doorbell_ and publisher_doorbell_: gRPC threads ring
+    // doorbell_ on every submit/broadcast, so without separating it from
+    // the shard thread's own events_/staged_/sequence_ (and from the
+    // publisher_doorbell_ reference right after it) that cross-thread write
+    // would false-share a cache line with state only this thread touches
+    // (ADR-0011's cache-line rule).
+    alignas(concurrency::cache_line_size) concurrency::Doorbell doorbell_;
+    alignas(concurrency::cache_line_size) concurrency::Doorbell& publisher_doorbell_;
     domain::EventBuffer events_;
     std::vector<OutboundItem> staged_;
     std::uint64_t sequence_{0};

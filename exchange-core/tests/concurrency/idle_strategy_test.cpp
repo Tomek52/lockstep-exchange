@@ -145,7 +145,8 @@ TEST(ParkingIdle, WakesEvenWhenThePushLandsRightBeforeTheParkingCall) {
     Doorbell doorbell;
     std::stop_source never_stops;
     const std::stop_token stop = never_stops.get_token();
-    ParkingIdle idle{doorbell, stop, ParkingIdle::Config{.spins = 0, .yields = 0}};
+    ParkingIdle idle{doorbell, stop, /*parks_counter=*/nullptr,
+                     ParkingIdle::Config{.spins = 0, .yields = 0}};
 
     // Establishes pending_seen_ at the current (pre-ring) counter value;
     // nothing to wait for yet since nothing has rung.
@@ -178,10 +179,18 @@ TEST(ParkingIdle, WakesEvenWhenThePushLandsRightBeforeTheParkingCall) {
 // later items already queued behind it. If ParkingIdle ever parked using a
 // `seen` sampled too late (after that same iteration's try_pop()), a push
 // landing in the gap would be lost and this test would hang.
-TEST(ParkingIdle, NoLostWakeupUnderConcurrentPushAndStop) {
+//
+// Producers pause briefly between bursts (instead of pushing flat-out) so
+// the consumer actually drains to empty and reaches the park phase between
+// bursts - spins=yields=0 forces every empty check straight to
+// Doorbell::wait() too, so this exercises real parking, not just spin/yield
+// escalation that never blocks. The name doesn't mention "stop": shutdown
+// while parked is covered separately by ShutsDownPromptlyWhileParked below.
+TEST(ParkingIdle, NoLostWakeupUnderBurstyConcurrentPush) {
     constexpr int producers = 4;
-    constexpr int per_producer = 20'000;
-    constexpr int total = producers * per_producer;
+    constexpr int bursts = 50;
+    constexpr int per_burst = 100;
+    constexpr int total = producers * bursts * per_burst;
 
     MpscQueue<int> queue{64};  // small on purpose: forces producers to retry/interleave
     Doorbell doorbell;
@@ -192,17 +201,21 @@ TEST(ParkingIdle, NoLostWakeupUnderConcurrentPushAndStop) {
     producer_threads.reserve(producers);
     for (int p = 0; p < producers; ++p) {
         producer_threads.emplace_back([&queue, &doorbell] {
-            for (int i = 0; i < per_producer; ++i) {
-                while (!queue.try_push(1)) {
-                    std::this_thread::yield();
+            for (int b = 0; b < bursts; ++b) {
+                for (int i = 0; i < per_burst; ++i) {
+                    while (!queue.try_push(1)) {
+                        std::this_thread::yield();
+                    }
+                    doorbell.ring();  // after the push, per Doorbell's contract
                 }
-                doorbell.ring();  // after the push, per Doorbell's contract
+                std::this_thread::sleep_for(std::chrono::microseconds{200});
             }
         });
     }
 
     int received = 0;
-    ParkingIdle idle{doorbell, stop};
+    ParkingIdle idle{doorbell, stop, /*parks_counter=*/nullptr,
+                     ParkingIdle::Config{.spins = 0, .yields = 0}};
     while (received < total) {
         std::optional<int> item = queue.try_pop();
         if (item) {

@@ -104,6 +104,82 @@ TEST_F(EnginePipelineTest, SubmitAfterStopIsRefused) {
     EXPECT_EQ(engine.submit(buy(InstrumentId{1}), {}).error(), SubmitError::ShuttingDown);
 }
 
+// task 007: idle/parking strategy and runtime statistics.
+
+TEST_F(EnginePipelineTest, StatsReflectCommandsBatchesAndMaxBatch) {
+    for (int i = 0; i < 5; ++i) {
+        auto [completion, reply] = test::reply_future();
+        ASSERT_TRUE(engine.submit(buy(InstrumentId{2}), std::move(completion)).has_value());
+        // Waiting for each reply before the next submit means the shard has
+        // always fully drained and gone back to polling an empty ingress
+        // before the next command can arrive, so each lands in its own
+        // single-command batch - batches and max_batch are exact, not just
+        // bounded.
+        ASSERT_EQ(reply.wait_for(test::reply_timeout), std::future_status::ready);
+    }
+    engine.stop();
+
+    const std::vector<ShardStats> stats = engine.shard_stats();
+    ASSERT_EQ(stats.size(), 2U);
+
+    // Shard 0 (instrument 1) never received a command in this test.
+    EXPECT_EQ(stats[0].commands, 0U);
+    EXPECT_EQ(stats[0].batches, 0U);
+    EXPECT_EQ(stats[0].max_batch, 0U);
+
+    // Shard 1 (instrument 2) processed the 5 submitted commands in 5
+    // separate single-command batches (see the comment above).
+    EXPECT_EQ(stats[1].commands, 5U);
+    EXPECT_EQ(stats[1].batches, 5U);
+    EXPECT_EQ(stats[1].max_batch, 1U);
+}
+
+TEST_F(EnginePipelineTest, IdleShardParksRatherThanPolling) {
+    // Long enough for the spin (256 iters) and yield (64 iters) phases to
+    // exhaust and reach the park phase, which takes well under a
+    // millisecond. ParkingIdle publishes parks_stat_ the moment it enters
+    // Doorbell::wait() - before it blocks, not after it returns - so a
+    // shard that has reached the park phase already reports >=1 here, even
+    // though it may then stay blocked inside that single wait() call for
+    // the rest of the test (the old publish-after-return design could not
+    // tell a thread genuinely parked like that apart from one that never
+    // reached the park phase at all: both read 0).
+    //
+    // Deliberately not a delta between the two snapshots below (reviewed in
+    // task 007's follow-up): if the shard parks once and then stays blocked
+    // in that single wait() call for the entire 200ms window - the *best*
+    // possible outcome - the delta between an after_settle and an after_idle
+    // reading is legitimately 0, which a `delta >= 1` assertion would wrongly
+    // fail against a correct implementation. Using an absolute floor right
+    // after settling (it must have reached the park phase by then) and an
+    // absolute ceiling after the full idle window (it must not be spinning)
+    // avoids that false failure while still catching both bugs.
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    const std::vector<ShardStats> after_settle = engine.shard_stats();
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    const std::vector<ShardStats> after_idle = engine.shard_stats();
+    engine.stop();
+
+    ASSERT_EQ(after_settle.size(), after_idle.size());
+    for (std::size_t i = 0; i < after_settle.size(); ++i) {
+        EXPECT_GE(after_settle[i].parks, 1U);
+        // Staying blocked in one wait() call for the whole 200ms (parks
+        // unchanged since after_settle) is the *best* outcome, not a
+        // failure - this only bounds the other end: a thread that is
+        // spinning instead of really parking would rack up thousands of
+        // wait() calls, not a handful.
+        EXPECT_LE(after_idle[i].parks, 5U);
+    }
+}
+
+TEST_F(EnginePipelineTest, StopReturnsPromptlyOnIdleEngine) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{20});  // let it actually park first
+    const auto start = std::chrono::steady_clock::now();
+    engine.stop();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_LT(elapsed, std::chrono::milliseconds{100});
+}
+
 // task 007 follow-up (code review): a batch whose output does not fit in a
 // full, parked publisher's egress queue must not livelock the shard. Both
 // tests below heap-allocate Engine and only call stop() on the success path:

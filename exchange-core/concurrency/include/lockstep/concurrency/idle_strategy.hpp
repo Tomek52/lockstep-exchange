@@ -76,12 +76,12 @@ static_assert(IdleStrategy<BackoffIdle>);
 /// the state the waiter cares about (e.g. a pushed queue element) is already
 /// visible to other threads.
 ///
-/// Built on std::atomic<T>::wait/notify_one rather than a condition variable:
-/// the standard specifically designed that pair to close the lost-wakeup
-/// window between "check the condition" and "start blocking" (ADR-0011),
+/// Built on std::atomic<T>::wait/notify_one rather than a condition
+/// variable: the standard specifically designed that pair to close the
+/// lost-wakeup window between "check the condition" and "start blocking",
 /// which a std::condition_variable can only get by also holding a mutex
-/// across both steps - something the single-writer runtime (ADR-0003) would
-/// rather not add to its hot path.
+/// across both steps - a lock this runtime's shard/publisher threads would
+/// otherwise need only for parking (task 007).
 class Doorbell {
 public:
     [[nodiscard]] std::uint64_t value() const noexcept {
@@ -99,6 +99,17 @@ public:
         // notify_one() is enough; a second ring before the waiter wakes just
         // coalesces into a larger counter delta, which wait()'s "did the
         // value change" check already handles.
+        //
+        // libstdc++ 14's std::atomic<uint64_t>::wait/notify is not futex-
+        // native (that needs a 32-bit, address-free word): it goes through a
+        // small shared pool of proxy waiters, keyed by a hash of this
+        // object's address, so distinct Doorbells can collide on the same
+        // proxy and a notify_one() can wake (and immediately re-check) a
+        // thread parked on a different Doorbell. Correctness is unaffected
+        // (every waiter re-checks its own `seen` against its own counter
+        // before blocking again), but it is a measurement item for the
+        // under-load benchmark (task 018), not something this type change
+        // can fix - the Doorbell/ParkingIdle interface is fixed by task 007.
         counter_.notify_one();
     }
 
@@ -127,8 +138,21 @@ private:
     std::atomic<std::uint64_t> counter_{0};
 };
 
+// Not nested inside ParkingIdle: a default member initializer there cannot
+// be used in that class's own constructor's default argument until the
+// class is complete (GCC/Clang agree: "default member initializer ...
+// required before the end of its enclosing class").
+struct ParkingIdleConfig {
+    std::uint32_t spins = 256;
+    std::uint32_t yields = 64;
+};
+
 /// Spin -> yield -> park on a Doorbell. Constructed per run() call with the
 /// Doorbell to park on and the stop_token the caller's loop is driven by.
+/// `parks_counter`, if given, is bumped (relaxed store) at the moment this
+/// strategy enters Doorbell::wait() - not after it returns - so a reader on
+/// another thread (e.g. ShardRuntime::stats()) can observe "this thread is
+/// now parked" while it is still blocked, rather than only after it wakes.
 ///
 /// Avoiding lost wake-ups: a `seen` value is captured at the end of every
 /// idle(0) call, to be used only by the *next* call if that one parks. The
@@ -138,21 +162,15 @@ private:
 /// requires. Sampling value() fresh inside the park branch itself would
 /// instead read it *after* that same call's check, which is too late (see
 /// Doorbell::wait()'s comment).
-/// Not nested inside ParkingIdle: a default member initializer there cannot
-/// be used in that class's own constructor's default argument until the
-/// class is complete (GCC/Clang agree: "default member initializer ...
-/// required before the end of its enclosing class").
-struct ParkingIdleConfig {
-    std::uint32_t spins = 256;
-    std::uint32_t yields = 64;
-};
-
 class ParkingIdle {
 public:
     using Config = ParkingIdleConfig;
 
-    ParkingIdle(Doorbell& doorbell, const std::stop_token& stop, Config config = {}) noexcept
-        : doorbell_{&doorbell}, stop_{&stop}, config_{config} {}
+    ParkingIdle(Doorbell& doorbell,
+                const std::stop_token& stop,
+                std::atomic<std::uint64_t>* parks_counter = nullptr,
+                Config config = {}) noexcept
+        : doorbell_{&doorbell}, stop_{&stop}, parks_counter_{parks_counter}, config_{config} {}
 
     void idle(std::size_t work) {
         if (work > 0) {
@@ -164,8 +182,14 @@ public:
         } else if (idle_iterations_ < config_.spins + config_.yields) {
             std::this_thread::yield();
         } else {
-            doorbell_->wait(pending_seen_, *stop_);
             ++parks_;
+            if (parks_counter_ != nullptr) {
+                // relaxed: diagnostic only; published before blocking so a
+                // reader sees "parked" while this thread is still inside
+                // wait(), not only after it returns (see the class comment).
+                parks_counter_->store(parks_, std::memory_order_relaxed);
+            }
+            doorbell_->wait(pending_seen_, *stop_);
         }
         if (idle_iterations_ < config_.spins + config_.yields) {
             ++idle_iterations_;  // saturate: stay in the park phase until work arrives
@@ -176,10 +200,12 @@ public:
 
     void reset() noexcept { idle_iterations_ = 0; }
 
-    /// Number of times this strategy actually blocked in Doorbell::wait(),
-    /// as opposed to spinning or yielding. Single-threaded: only the thread
-    /// driving idle() may call this (a caller that needs the count visible
-    /// to other threads copies it into its own atomic, e.g. ShardRuntime).
+    /// Number of times this strategy has entered Doorbell::wait() during the
+    /// park phase. Not necessarily how long (or whether) it actually stayed
+    /// blocked - a stop request or a spurious wake can make wait() return
+    /// immediately. Single-threaded: only the thread driving idle() may call
+    /// this (a caller that needs the count visible to other threads passes
+    /// `parks_counter` to the constructor instead, e.g. ShardRuntime).
     [[nodiscard]] std::uint64_t parks() const noexcept { return parks_; }
 
 private:
@@ -193,6 +219,7 @@ private:
 
     Doorbell* doorbell_;
     const std::stop_token* stop_;
+    std::atomic<std::uint64_t>* parks_counter_;
     Config config_{};
     std::uint32_t idle_iterations_{0};
     std::uint64_t pending_seen_{0};
