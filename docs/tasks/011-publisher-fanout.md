@@ -31,6 +31,17 @@ struct SubscriptionFilter {
     bool book_updates{true};
     bool private_events{false};  // OrderAccepted/Cancelled/Modified, RiskCommandApplied (risk client)
 };
+```
+
+`InstrumentStatusChanged` is gated by none of the three booleans above: a
+halt/resume is always delivered, subject only to the instrument filter -
+`market_data.proto` carries no status flag of its own, and an order-entry
+client needs to know about a halt regardless of what else it asked for.
+`RiskCommandApplied` carries no instrument (a per-shard broadcast ack, not
+scoped to one book), so the instrument filter never excludes it; it is still
+gated by `private_events`.
+
+```cpp
 
 /// Consumer end of a subscription. Thread-safe to use from ONE consumer thread
 /// (e.g. a gRPC reactor) while the publisher produces.

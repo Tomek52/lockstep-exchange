@@ -58,25 +58,58 @@ flowchart LR
 `Engine::subscribe(filter, capacity)` lets any thread register a
 `Subscription` while the engine is running - a bounded, per-consumer SPSC
 ring plus a `SubscriptionFilter` (instruments, and trades/book-updates/
-private-events flags). Registration cannot touch `subscriptions_` directly
-from the calling thread (that list is the publisher's alone, same
-single-writer rule as everything else here), so `subscribe()` instead
-pushes the new `Subscription` through a small bounded MPSC control queue and
-rings the publisher's doorbell; the publisher drains that queue at the very
-start of every `poll_once()`, before it can deliver anything from this
-iteration's egress items - the ordering the atomicity acceptance criterion
-needs: a subscription already in `subscriptions_` before the first event of
-a command is flushed either gets the whole command's events or none of them,
-never a partial command, and never one flushed before it registered.
+private-events flags; `InstrumentStatusChanged` is gated only by the
+instrument filter, never by the three booleans). Registration cannot touch
+`subscriptions_` directly from the calling thread (that list is the
+publisher's alone, same single-writer rule as everything else here), so
+`subscribe()` instead pushes the new `Subscription` through a small bounded
+MPSC control queue and rings the publisher's doorbell; the publisher drains
+that queue (`drain_control()`) immediately before *every single pop* from
+every egress queue, not just once per `poll_once()` call or once per flush.
+
+That placement is load-bearing, not cosmetic (found missing, with the
+production incident below, in task 011's own review). `ShardRuntime::release_staged()`
+pushes one command's events to egress with a separate `try_push()` per
+event, not as one atomic unit, so the publisher's `try_pop()` can see
+"nothing more right now" partway through a command and the rest only once
+the shard catches up - a subscription that registered in that gap must
+receive either *all* of that command's events or *none*, never just the
+tail. Every `PublishedEvent` carries its command's per-shard `sequence`, so
+the publisher instead tracks `last_sequence_[shard]` (the sequence of the
+last item popped so far for that shard) and stamps it onto every newly
+registered `Subscription` as `start_sequence_` the moment it is drained off
+the control queue; `Subscription::wants()` only ever delivers events whose
+sequence is strictly later. Because one command's events all share its
+sequence number, that threshold can never admit part of a command while
+excluding the rest: either the whole command postdates the stamp (none of
+it had been popped when this subscription registered) or none of it does.
+Draining right before every pop, rather than less often, is also what makes
+a command submitted strictly after `subscribe()` returns always delivered
+in full: a production incident on this task's PR (CI's release build) found
+a command's events dropped entirely because the control queue was drained
+only once per `poll_once()` call, and a single call's inner loop can pop
+several commands' worth of items - including a brand-new one - before ever
+checking it again.
 
 A subscriber that stops polling fills its ring; the publisher never blocks
 on it (ADR-0006's slow-consumer policy). The moment a push to a
 subscription's ring fails, that `Subscription` is marked `overflowed()`
 (no further events are delivered to it) and its `on_ready()` hook, if any,
 fires once; the publisher drops it from `subscriptions_` on its next
-`poll_once()` iteration. `EventSubscriber`/`add_subscriber()` - synchronous,
-registered only before `start()` - is unchanged and still the risk client's
-path.
+`poll_once()` iteration (`prune_subscriptions()`, once per call - cheap
+enough, and this cleanup is not latency-sensitive the way registration
+ordering is). `cancel()` additionally waits out any `on_ready()` invocation
+already in progress (a short spin, never a park) before returning, so a
+consumer may safely destroy whatever its hook captured right after
+`cancel()` returns - without that handshake, the publisher thread could
+still be inside a just-cancelled hook when the consumer frees its state.
+When the publisher thread itself is about to exit, it closes every
+subscription it still knows about (same effect as overflow) so a consumer
+waiting only on `on_ready()` cannot hang past shutdown; `subscribe()` called
+after that point returns an already-closed `Subscription` instead of
+spinning forever on a control queue nobody will ever drain again.
+`EventSubscriber`/`add_subscriber()` - synchronous, registered only before
+`start()` - is unchanged and still the risk client's path.
 
 ## Life of an order
 
@@ -196,5 +229,7 @@ signal handler ever runs concurrently with the runtime.
 | MPSC slot sequences, `enqueue_pos_` | task 006 | acquire/release + relaxed CAS | See ADR-0011 |
 | `Doorbell::counter_` | `concurrency/idle_strategy.hpp`, task 007 | acquire/release | `ring()` must happen-before whatever a waiter observes once woken |
 | `ShardStats` counters | `app/shard_runtime.{hpp,cpp}`, task 007 | relaxed | Diagnostic only; single writer (the shard thread), read from any thread |
-| `Subscription::cancelled_`/`overflowed_` | `app/subscription.{hpp,cpp}`, task 011 | relaxed | Pure signal flags; the ring's own SpscQueue acquire/release already orders its contents independently |
-| `Subscription::on_ready_` | `app/subscription.{hpp,cpp}`, task 011 | release (set) / acquire (invoke) | Publishes the callback's captured state before the publisher thread invokes it |
+| `Subscription::overflowed_` | `app/subscription.{hpp,cpp}`, task 011 | release (set) / acquire (read) | `close()` sets it with no accompanying ring push, so unlike a plain overflow this flag has to carry its own happens-before to the consumer |
+| `Subscription::cancelled_`/`notifying_` | `app/subscription.{hpp,cpp}`, task 011 | seq_cst | Dekker handshake: `cancel()` must not return while `notify_ready()` could still be mid-callback (so the consumer can safely destroy captured state right after) - two independent atomics, so acquire/release alone cannot prevent each side observing only its own write first |
+| `Subscription::on_ready_` | `app/subscription.{hpp,cpp}`, task 011 | release (set, compare_exchange) / acquire (invoke) | Publishes the callback's captured state before the publisher thread invokes it; set-once (CAS from null) so a second call never frees a callback the publisher might be running |
+| `Publisher::stopped_` | `app/publisher.{hpp,cpp}`, task 011 | release (set in `run()`) / acquire (read in `subscribe()`) | Set only after every remaining subscription has been closed, so a `subscribe()` that observes it true never needs to touch the (no-longer-drained) control queue |
