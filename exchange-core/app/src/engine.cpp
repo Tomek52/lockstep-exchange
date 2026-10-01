@@ -54,6 +54,10 @@ void Engine::add_subscriber(EventSubscriber& subscriber) {
     publisher_.add_subscriber(subscriber);
 }
 
+std::shared_ptr<Subscription> Engine::subscribe(SubscriptionFilter filter, std::size_t capacity) {
+    return publisher_.subscribe(std::move(filter), capacity);
+}
+
 void Engine::start() {
     for (const auto& shard : shards_) {
         shard_threads_.emplace_back(

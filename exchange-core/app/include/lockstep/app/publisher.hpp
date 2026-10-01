@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <stop_token>
 #include <vector>
 
 #include "lockstep/app/messages.hpp"
 #include "lockstep/app/ports/event_subscriber.hpp"
 #include "lockstep/app/queues.hpp"
+#include "lockstep/app/subscription.hpp"
 #include "lockstep/concurrency/idle_strategy.hpp"
 
 namespace lockstep::app {
@@ -19,9 +21,10 @@ namespace lockstep::app {
 /// reply's completion runs, so a client that sees an ack can rely on the
 /// corresponding market data having been handed to the transport.
 ///
-/// SKELETON STATUS: subscribers are registered before start and called
-/// synchronously. Task 011 adds per-subscriber bounded buffers and the
-/// slow-consumer policy.
+/// Two subscriber shapes: EventSubscriber (add_subscriber(), registered
+/// before start, called synchronously - the risk client's path today) and
+/// Subscription (subscribe(), registered at runtime from any thread, each
+/// with its own bounded buffer and the slow-consumer policy - task 011).
 class Publisher {
 public:
     /// `doorbell` is rung by each shard once per released batch (task 007),
@@ -36,6 +39,12 @@ public:
     /// Must be called before the publisher thread starts.
     void add_subscriber(EventSubscriber& subscriber);
 
+    /// Registers a new Subscription and returns the consumer's handle to it.
+    /// Thread-safe from any thread: registration is handed to the publisher
+    /// thread through a bounded control queue, so subscriptions_ itself is
+    /// still touched only by the publisher (ADR-0003's single-writer rule).
+    std::shared_ptr<Subscription> subscribe(SubscriptionFilter filter, std::size_t capacity);
+
     /// Thread body. Returns after `stop` is requested and all sources are
     /// drained. Precondition: the shard threads have already exited.
     void run(const std::stop_token& stop);
@@ -43,10 +52,17 @@ public:
 private:
     std::size_t poll_once();
     void flush_events();
+    void apply_control();
+    void deliver_to(Subscription& subscription);
 
     std::vector<EgressQueue*> sources_;
     concurrency::Doorbell& doorbell_;
     std::vector<EventSubscriber*> subscribers_;
+    std::vector<std::shared_ptr<Subscription>> subscriptions_;
+    // Sized well above any expected concurrent-subscribe burst; subscribe()
+    // retries (yielding) on the rare chance it is ever full, the same
+    // back-pressure shape as Engine::broadcast()'s ingress retry.
+    SubscriptionControlQueue control_{1024};
     std::vector<PublishedEvent> pending_;
     std::size_t max_batch_;
 };

@@ -47,6 +47,9 @@ public:
     ~Engine() override;
 
     void add_subscriber(EventSubscriber& subscriber);
+    /// Registers a new Subscription at runtime; see Publisher::subscribe.
+    /// Safe to call from any thread, before or after start().
+    std::shared_ptr<Subscription> subscribe(SubscriptionFilter filter, std::size_t capacity);
     void start();
     void stop();
 
