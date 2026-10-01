@@ -11,6 +11,7 @@
 #include <optional>
 #include <random>
 #include <ranges>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -26,13 +27,21 @@ TEST(MpscQueueTest, StressEightProducersFiveHundredThousandEachExactlyOnceAndPer
     constexpr std::uint64_t per_producer = 500'000;
     MpscQueue<std::uint64_t> queue{1024};
 
+    // Each producer checks the stop token in its retry loop. If a consumer
+    // assertion below fails, the TEST body returns early and the jthreads'
+    // destructors request_stop() and join(); without this check a producer
+    // still spinning on a full queue (because the consumer stopped
+    // consuming) would hang that join forever.
     std::vector<std::jthread> threads;
     threads.reserve(producers);
     for (std::uint64_t p = 0; p < producers; ++p) {
-        threads.emplace_back([&queue, p] {
+        threads.emplace_back([&queue, p](const std::stop_token& stop) {
             for (std::uint64_t i = 0; i < per_producer; ++i) {
                 std::uint64_t value = (p << 32U) | i;
                 while (!queue.try_push(std::move(value))) {
+                    if (stop.stop_requested()) {
+                        return;
+                    }
                     std::this_thread::yield();
                 }
             }
@@ -139,6 +148,129 @@ TEST(MpscQueueTest, LifetimeDestroysElementsStillQueuedOnDestruction) {
     EXPECT_EQ(constructions, destructions);
 }
 
+TEST(MpscQueueTest, LifetimeDestroysWrappedLeftoversAfterCapacityCyclesThroughTwice) {
+    // Same counting type as above, but driven past a full wrap of the ring
+    // first: three push+pop cycles at capacity 4 advance enqueue_pos_ and
+    // dequeue_pos_ to 3, reusing physical slots 0 and 1 along the way. The
+    // three items left queued at destruction then occupy physical slots
+    // {3, 0, 1}, not a contiguous [0, n) prefix, so this exercises the
+    // destructor's masked indexing rather than just its loop bound.
+    static int constructions = 0;
+    static int destructions = 0;
+    static int live = 0;
+
+    struct Tracked {
+        Tracked() {
+            ++constructions;
+            ++live;
+        }
+        Tracked(const Tracked&) = delete;
+        Tracked& operator=(const Tracked&) = delete;
+        Tracked(Tracked&&) noexcept {
+            ++constructions;
+            ++live;
+        }
+        Tracked& operator=(Tracked&&) = delete;
+        ~Tracked() {
+            ++destructions;
+            --live;
+            EXPECT_GE(live, 0) << "double destroy";
+        }
+    };
+
+    {
+        MpscQueue<Tracked> queue{4};
+        for (int i = 0; i < 3; ++i) {
+            ASSERT_TRUE(queue.try_push(Tracked{}));
+            auto popped = queue.try_pop();
+            ASSERT_TRUE(popped.has_value());
+        }
+        // Three more left queued at destruction, wrapped into slots 3, 0, 1.
+        for (int i = 0; i < 3; ++i) {
+            ASSERT_TRUE(queue.try_push(Tracked{}));
+        }
+    }
+
+    EXPECT_EQ(live, 0) << "leak";
+    EXPECT_EQ(constructions, destructions);
+}
+
+TEST(MpscQueueTest, ProducerStalledBetweenClaimAndPublishTransientlyHidesLaterItems) {
+    // Pins the property documented on MpscQueue's class comment: a producer
+    // that is preempted between claiming its slot (the CAS) and publishing
+    // it (the release store to sequence) makes the queue report "empty"
+    // even though a later slot already holds a fully published item.
+    struct BlockingElement {
+        int tag;
+        // Set (and notified) once this element's move constructor starts;
+        // lets the main thread know producer A is inside try_push(),
+        // past the CAS but before the publishing store. nullptr for
+        // elements that should not block (e.g. producer B's).
+        std::atomic<bool>* entered = nullptr;
+        // The move constructor blocks here until this becomes true; lets
+        // the test control exactly when producer A's push completes.
+        std::atomic<bool>* release = nullptr;
+
+        explicit BlockingElement(int t,
+                                 std::atomic<bool>* entered_flag = nullptr,
+                                 std::atomic<bool>* release_flag = nullptr)
+            : tag{t}, entered{entered_flag}, release{release_flag} {}
+        BlockingElement(const BlockingElement&) = delete;
+        BlockingElement& operator=(const BlockingElement&) = delete;
+        BlockingElement(BlockingElement&& other) noexcept
+            : tag{other.tag}, entered{other.entered}, release{other.release} {
+            if (entered != nullptr) {
+                entered->store(true, std::memory_order_release);
+                entered->notify_all();
+            }
+            if (release != nullptr) {
+                release->wait(false, std::memory_order_acquire);
+            }
+        }
+        BlockingElement& operator=(BlockingElement&&) = delete;
+        ~BlockingElement() = default;
+    };
+
+    MpscQueue<BlockingElement> queue{4};
+
+    std::atomic<bool> a_entered{false};
+    std::atomic<bool> a_release{false};
+    std::atomic<bool> a_push_ok{false};
+
+    // Producer A: claims a slot, then blocks inside construct_at's move
+    // constructor before publishing it. Push success is recorded for the
+    // main thread to check after join rather than asserted on this thread
+    // (gtest assertions are not meant to cross threads).
+    std::jthread producer_a([&queue, &a_entered, &a_release, &a_push_ok] {
+        BlockingElement element{1, &a_entered, &a_release};
+        a_push_ok.store(queue.try_push(std::move(element)), std::memory_order_relaxed);
+    });
+
+    a_entered.wait(false, std::memory_order_acquire);
+    // Happens-after the acquire wait above: producer A's CAS has already
+    // claimed its slot and it is now blocked before publishing it.
+
+    BlockingElement b{2};
+    ASSERT_TRUE(queue.try_push(std::move(b)));  // claims the next slot, publishes immediately
+
+    // B's item is fully published, but it sits behind A's claimed-but-not-
+    // yet-published slot: try_pop() must report empty, not skip ahead to B.
+    EXPECT_FALSE(queue.try_pop().has_value());
+
+    a_release.store(true, std::memory_order_release);
+    a_release.notify_all();
+    producer_a.join();
+    EXPECT_TRUE(a_push_ok.load(std::memory_order_relaxed));
+
+    auto first = queue.try_pop();
+    ASSERT_TRUE(first.has_value());
+    EXPECT_EQ(first->tag, 1);
+    auto second = queue.try_pop();
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(second->tag, 2);
+    EXPECT_FALSE(queue.try_pop().has_value());
+}
+
 TEST(MpscQueueTest, CapacityRoundsUpToPowerOfTwoWithMinimumTwo) {
     EXPECT_EQ((MpscQueue<int>{0}.capacity()), 2U);
     EXPECT_EQ((MpscQueue<int>{1}.capacity()), 2U);
@@ -187,13 +319,19 @@ TEST(MpscQueueTest, StressNonTrivialTypeAtCapacityTwoUnderContention) {
     constexpr std::size_t per_producer = 200'000;
     MpscQueue<std::unique_ptr<std::size_t>> queue{2};
 
+    // See the stop-token note in the stress test above: without it, a
+    // consumer assertion failure here could leave a producer spinning on a
+    // full queue forever, hanging the jthreads' join on scope exit.
     std::vector<std::jthread> threads;
     threads.reserve(producers);
     for (std::size_t p = 0; p < producers; ++p) {
-        threads.emplace_back([&queue, p] {
+        threads.emplace_back([&queue, p](const std::stop_token& stop) {
             for (std::size_t i = 0; i < per_producer; ++i) {
                 auto item = std::make_unique<std::size_t>((p << 32U) | i);
                 while (!queue.try_push(std::move(item))) {
+                    if (stop.stop_requested()) {
+                        return;
+                    }
                     std::this_thread::yield();
                 }
             }

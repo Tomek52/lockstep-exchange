@@ -1,10 +1,11 @@
-// Contract tests every queue implementation must pass. Add SpscQueue (task 005)
-// and MpscQueue (task 006) to the type lists below; the multi-producer stress
-// test also runs under the TSan preset.
+// Contract tests every queue implementation must pass: MutexQueue, SpscQueue
+// (task 005) and MpscQueue (task 006) are all registered in the type lists
+// below; the multi-producer stress test also runs under the TSan preset.
 #include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <ranges>
+#include <stop_token>
 #include <thread>
 #include <vector>
 
@@ -18,8 +19,7 @@
 namespace lockstep::concurrency {
 namespace {
 
-// Concept conformance, including the not-yet-implemented queues: their
-// interfaces are fixed by the skeleton so that tasks only fill in bodies.
+// Concept conformance for every queue implementation.
 static_assert(MultiProducerQueue<MutexQueue<int>>);
 static_assert(MultiProducerQueue<MpscQueue<int>>);
 static_assert(SingleProducerQueue<SpscQueue<int>>);
@@ -74,12 +74,20 @@ TYPED_TEST(MultiProducerContract, EveryItemArrivesExactlyOnceAndPerProducerOrder
     constexpr std::uint64_t per_producer = 20'000;
     TypeParam queue{1024};
 
+    // Each producer checks the stop token in its retry loop. If a consumer
+    // assertion below fails, the TEST body returns early and the jthreads'
+    // destructors request_stop() and join(); without this check a producer
+    // still spinning on a full queue (because the consumer stopped
+    // consuming) would hang that join forever.
     std::vector<std::jthread> threads;
     for (std::uint64_t p = 0; p < producers; ++p) {
-        threads.emplace_back([&queue, p] {
+        threads.emplace_back([&queue, p](const std::stop_token& stop) {
             for (std::uint64_t i = 0; i < per_producer; ++i) {
                 std::uint64_t value = (p << 32U) | i;
                 while (!queue.try_push(std::move(value))) {
+                    if (stop.stop_requested()) {
+                        return;
+                    }
                     std::this_thread::yield();
                 }
             }
