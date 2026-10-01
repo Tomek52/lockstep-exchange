@@ -74,6 +74,7 @@ sequenceDiagram
         G-->>C: RESOURCE_EXHAUSTED
     else
         G->>I: try_push(InboundCommand{cmd, completion})
+        G->>S: shard doorbell.ring()
         Note over G: handler returns immediately,<br/>no gRPC thread waits
         S->>I: try_pop (batch)
         S->>S: seq = ++sequence, ts = clock.now()
@@ -81,6 +82,7 @@ sequenceDiagram
         S->>S: engine.apply → result + events
         S->>J: commit() (end of batch)
         S->>E: push events, then ReplyTask
+        S->>P: publisher doorbell.ring()
         P->>E: try_pop
         P->>P: fan out events to subscribers
         P->>G: completion(reply): encode ack, reactor->Finish(OK)
@@ -90,6 +92,31 @@ sequenceDiagram
 
 The ack is never sent before the command is journaled: outputs are released
 only after `commit()` ([ADR-0004](../adr/0004-deterministic-replay-via-per-shard-journal.md)).
+
+## Idle threads and runtime statistics
+
+Shard and publisher threads run `ParkingIdle`
+(`concurrency/idle_strategy.hpp`, task 007): spin, then yield, then park on a
+`Doorbell` - an `std::atomic<uint64_t>` counter with `wait()`/`notify_one()` -
+instead of `BackoffIdle`'s fixed `sleep_for(50µs)`. A parked thread uses no
+CPU and wakes as soon as a producer rings its doorbell, rather than up to one
+sleep period late. Every shard has its own ingress doorbell, rung by
+`Engine::submit`/`broadcast` after a successful push; every shard also rings
+the publisher's single (shared) egress doorbell once per released batch.
+
+Avoiding a lost wake-up needs the same care MpscQueue's own stall property
+does: a producer preempted between claiming a slot and publishing it makes
+`try_pop()` report "empty" while a later, fully published item sits behind
+it. `ParkingIdle` captures the doorbell's counter value at the *end* of each
+idle iteration, for use only by the *next* one - so the value it eventually
+waits on was always sampled strictly before that iteration's own "is there
+work" check, never after. `std::stop_callback` rings a thread's doorbell
+when its `stop_token` is requested, so a parked thread also wakes promptly
+on shutdown.
+
+Each `ShardRuntime` exposes a `ShardStats` snapshot (`commands`, `batches`,
+`max_batch`, `parks`) through relaxed atomics, readable from any thread at
+any time; `Engine::shard_stats()` collects every shard's.
 
 ## Shutdown protocol
 
@@ -111,9 +138,11 @@ sequenceDiagram
     Note over RC: link-down journaled as RiskLinkStatus
     M->>EN: stop()
     EN->>SH: request_stop (std::stop_token)
+    Note over SH: stop_callback rings the shard's<br/>doorbell if it is parked
     SH->>SH: drain ingress, commit journal
     EN->>SH: join (std::jthread)
     EN->>PU: request_stop
+    Note over PU: stop_callback rings the publisher's<br/>doorbell if it is parked
     PU->>PU: drain every egress, run completions
     EN->>PU: join
     M->>M: "exchange-core stopped cleanly", exit 0
@@ -133,3 +162,5 @@ signal handler ever runs concurrently with the runtime.
 | `RiskClient::established_` | `adapters/risk_client` | release / acquire | Publishes the accept handler's effects |
 | SPSC `head_`/`tail_` | task 005 | acquire/release pairs | See ADR-0011 |
 | MPSC slot sequences, `enqueue_pos_` | task 006 | acquire/release + relaxed CAS | See ADR-0011 |
+| `Doorbell::counter_` | `concurrency/idle_strategy.hpp`, task 007 | acquire/release | `ring()` must happen-before whatever a waiter observes once woken |
+| `ShardStats` counters | `app/shard_runtime.{hpp,cpp}`, task 007 | relaxed | Diagnostic only; single writer (the shard thread), read from any thread |
