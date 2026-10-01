@@ -101,15 +101,20 @@ void ShardRuntime::process(InboundCommand inbound) {
 void ShardRuntime::release_staged() {
     for (OutboundItem& item : staged_) {
         // try_push leaves `item` untouched on failure, so retrying is safe.
-        // The publisher always drains, so this back-pressure is bounded.
+        // A full egress means a parked publisher hasn't drained it yet,
+        // and yielding alone never wakes a parked thread - only ring() does
+        // (task 007). Without ringing here, a batch whose output exceeds
+        // egress_capacity would spin this thread forever: the end-of-batch
+        // ring below is unreachable until this loop returns.
         while (!egress_.try_push(std::move(item))) {  // NOLINT(bugprone-use-after-move)
+            publisher_doorbell_.ring();
             std::this_thread::yield();
         }
     }
     staged_.clear();
-    // Ring once per batch, after every item in it is visible on egress - not
-    // once per item, since the publisher only needs to know "there is more
-    // to drain", not how much.
+    // Also ring after the whole batch is visible, in case the last item's
+    // push succeeded without the loop above ever needing to ring - the
+    // publisher must still learn about it.
     publisher_doorbell_.ring();
 }
 

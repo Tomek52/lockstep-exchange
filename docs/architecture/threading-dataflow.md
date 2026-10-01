@@ -102,7 +102,11 @@ instead of `BackoffIdle`'s fixed `sleep_for(50µs)`. A parked thread uses no
 CPU and wakes as soon as a producer rings its doorbell, rather than up to one
 sleep period late. Every shard has its own ingress doorbell, rung by
 `Engine::submit`/`broadcast` after a successful push; every shard also rings
-the publisher's single (shared) egress doorbell once per released batch.
+the publisher's single (shared) egress doorbell after releasing a batch -
+and, if a batch's output does not fit in one go (egress is full because a
+parked publisher has not drained it yet), on every retry of that push too,
+not just at the end: yielding alone never wakes a parked thread, so without
+that mid-batch ring the shard would spin forever on a full queue.
 
 Avoiding a lost wake-up needs the same care MpscQueue's own stall property
 does: a producer preempted between claiming a slot and publishing it makes

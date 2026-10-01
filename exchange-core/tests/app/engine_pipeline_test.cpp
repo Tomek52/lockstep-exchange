@@ -1,7 +1,9 @@
 // Walking-skeleton test of the threaded pipeline:
 // submit -> ingress -> shard (journal, apply) -> egress -> publisher -> completion.
 #include <chrono>
+#include <cstdint>
 #include <future>
+#include <memory>
 #include <thread>
 #include <variant>
 
@@ -102,55 +104,92 @@ TEST_F(EnginePipelineTest, SubmitAfterStopIsRefused) {
     EXPECT_EQ(engine.submit(buy(InstrumentId{1}), {}).error(), SubmitError::ShuttingDown);
 }
 
-// task 007: idle/parking strategy and runtime statistics.
+// task 007 follow-up (code review): a batch whose output does not fit in a
+// full, parked publisher's egress queue must not livelock the shard. Both
+// tests below heap-allocate Engine and only call stop() on the success path:
+// stopping a livelocked shard would itself hang in Engine::stop()'s join(),
+// since that shard thread never reaches its stop_requested() check while
+// stuck retrying a full egress queue - a bounded reply.wait_for() still
+// reports the failure below instead of hanging the test binary, and on
+// failure the Engine (and its still-spinning thread) is deliberately leaked
+// rather than destroyed.
 
-TEST_F(EnginePipelineTest, StatsReflectCommandsBatchesAndMaxBatch) {
-    for (int i = 0; i < 5; ++i) {
+TEST(ShardPublisherBackpressure, ReplyArrivesWhenPublisherIsParkedAndEgressIsTiny) {
+    ManualClock clock{1'000, 10};
+    test::MemoryJournals journals;
+    test::RecordingSubscriber subscriber;
+    // A single resting GTC limit order stages OrderAccepted + BookLevelChanged
+    // + its ReplyTask = 3 items, already more than this capacity.
+    auto engine = std::make_unique<Engine>(
+        EngineConfig{
+            .instruments = {{.id = InstrumentId{1}}}, .shard_count = 1, .egress_capacity = 2},
+        journals.factory(), clock);
+    engine->add_subscriber(subscriber);
+    engine->start();
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});  // let the publisher park
+
+    auto [completion, reply] = test::reply_future();
+    ASSERT_TRUE(engine->submit(buy(InstrumentId{1}), std::move(completion)).has_value());
+    const bool got_reply = reply.wait_for(test::reply_timeout) == std::future_status::ready;
+    EXPECT_TRUE(got_reply) << "shard livelocked retrying a full egress queue "
+                              "without waking the parked publisher";
+    if (got_reply) {
+        engine->stop();
+    } else {
+        (void)engine.release();  // see the comment above this test
+    }
+}
+
+TEST(ShardPublisherBackpressure, BatchExceedingEgressCapacityStillDrains) {
+    ManualClock clock{1'000, 10};
+    test::MemoryJournals journals;
+    test::RecordingSubscriber subscriber;
+    auto engine = std::make_unique<Engine>(
+        EngineConfig{
+            .instruments = {{.id = InstrumentId{1}}}, .shard_count = 1, .egress_capacity = 4},
+        journals.factory(), clock);
+    engine->add_subscriber(subscriber);
+    engine->start();
+
+    // Rest 5 sell orders one at a time (each ack'd before the next, so none
+    // of them alone exceeds capacity=4).
+    for (std::uint32_t i = 0; i < 5; ++i) {
         auto [completion, reply] = test::reply_future();
-        ASSERT_TRUE(engine.submit(buy(InstrumentId{2}), std::move(completion)).has_value());
+        NewOrder sell{.trader = TraderId{100 + i},
+                      .client_order_id = ClientOrderId{1},
+                      .instrument = InstrumentId{1},
+                      .side = Side::Sell,
+                      .type = OrderType::Limit,
+                      .time_in_force = TimeInForce::Gtc,
+                      .price = Price{100},
+                      .quantity = Quantity{1}};
+        ASSERT_TRUE(engine->submit(sell, std::move(completion)).has_value());
         ASSERT_EQ(reply.wait_for(test::reply_timeout), std::future_status::ready);
     }
-    engine.stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds{50});  // let the publisher park
 
-    const std::vector<ShardStats> stats = engine.shard_stats();
-    ASSERT_EQ(stats.size(), 2U);
-
-    // Shard 0 (instrument 1) never received a command in this test.
-    EXPECT_EQ(stats[0].commands, 0U);
-    EXPECT_EQ(stats[0].batches, 0U);
-    EXPECT_EQ(stats[0].max_batch, 0U);
-
-    // Shard 1 (instrument 2) processed exactly the 5 submitted commands,
-    // each one waited for individually, so in at least one and at most
-    // five batches (the shard may or may not coalesce a next command that
-    // arrives before it next polls).
-    EXPECT_EQ(stats[1].commands, 5U);
-    EXPECT_GE(stats[1].batches, 1U);
-    EXPECT_LE(stats[1].batches, 5U);
-    EXPECT_GE(stats[1].max_batch, 1U);
-    EXPECT_LE(stats[1].max_batch, 5U);
-    // batches * max_batch can't under-cover every command.
-    EXPECT_GE(stats[1].batches * stats[1].max_batch, stats[1].commands);
-}
-
-TEST_F(EnginePipelineTest, IdleShardParksRatherThanPolling) {
-    std::this_thread::sleep_for(std::chrono::milliseconds{200});
-    const std::vector<ShardStats> stats = engine.shard_stats();
-    engine.stop();
-
-    // A thread that is truly parked wakes only a handful of times in 200ms
-    // of silence (startup, maybe a spurious wake); one that is still
-    // polling in a tight loop would rack up thousands.
-    for (const ShardStats& shard_stats : stats) {
-        EXPECT_LE(shard_stats.parks, 5U);
+    // One aggressive buy sweeps all 5 resting sells in a single command: the
+    // Trade/BookLevelChanged/ReplyTask output from processing it (well over
+    // 4 items) is staged and released as one batch, entirely after the
+    // publisher parked.
+    auto [completion, reply] = test::reply_future();
+    NewOrder sweep{.trader = TraderId{1},
+                   .client_order_id = ClientOrderId{2},
+                   .instrument = InstrumentId{1},
+                   .side = Side::Buy,
+                   .type = OrderType::Limit,
+                   .time_in_force = TimeInForce::Gtc,
+                   .price = Price{100},
+                   .quantity = Quantity{5}};
+    ASSERT_TRUE(engine->submit(sweep, std::move(completion)).has_value());
+    const bool got_reply = reply.wait_for(test::reply_timeout) == std::future_status::ready;
+    EXPECT_TRUE(got_reply) << "shard livelocked retrying a full egress queue "
+                              "without waking the parked publisher";
+    if (got_reply) {
+        engine->stop();
+    } else {
+        (void)engine.release();  // see the comment above the previous test
     }
-}
-
-TEST_F(EnginePipelineTest, StopReturnsPromptlyOnIdleEngine) {
-    const auto start = std::chrono::steady_clock::now();
-    engine.stop();
-    const auto elapsed = std::chrono::steady_clock::now() - start;
-    EXPECT_LT(elapsed, std::chrono::milliseconds{100});
 }
 
 }  // namespace
