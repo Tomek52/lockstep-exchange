@@ -28,8 +28,9 @@ static_assert(!MultiProducerQueue<SpscQueue<int>>);
 template <typename Q>
 class QueueContract : public ::testing::Test {};
 
-using AllQueues =
-    ::testing::Types<MutexQueue<std::unique_ptr<int>>, SpscQueue<std::unique_ptr<int>>>;
+using AllQueues = ::testing::Types<MutexQueue<std::unique_ptr<int>>,
+                                   SpscQueue<std::unique_ptr<int>>,
+                                   MpscQueue<std::unique_ptr<int>>>;
 TYPED_TEST_SUITE(QueueContract, AllQueues);
 
 TYPED_TEST(QueueContract, PopFromEmptyReturnsNothing) {
@@ -65,7 +66,7 @@ TYPED_TEST(QueueContract, FullQueueRejectsWithoutConsumingTheValue) {
 template <typename Q>
 class MultiProducerContract : public ::testing::Test {};
 
-using MultiProducerQueues = ::testing::Types<MutexQueue<std::uint64_t>>;
+using MultiProducerQueues = ::testing::Types<MutexQueue<std::uint64_t>, MpscQueue<std::uint64_t>>;
 TYPED_TEST_SUITE(MultiProducerContract, MultiProducerQueues);
 
 TYPED_TEST(MultiProducerContract, EveryItemArrivesExactlyOnceAndPerProducerOrderHolds) {

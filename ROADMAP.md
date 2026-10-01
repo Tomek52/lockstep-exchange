@@ -29,7 +29,7 @@ The exchange actually trades.
 The single-writer runtime on its real queues, with honest idle behaviour.
 
 - [x] [005 Lock-free SPSC queue](docs/tasks/005-spsc-queue.md)
-- [ ] [006 Lock-free bounded MPSC queue](docs/tasks/006-mpsc-queue.md)
+- [x] [006 Lock-free bounded MPSC queue](docs/tasks/006-mpsc-queue.md)
 - [ ] [007 Parking idle strategy, wake-ups, runtime stats](docs/tasks/007-runtime-idle-and-stats.md)
 - [ ] [011 Publisher subscriptions with slow-consumer policy](docs/tasks/011-publisher-fanout.md)
 
