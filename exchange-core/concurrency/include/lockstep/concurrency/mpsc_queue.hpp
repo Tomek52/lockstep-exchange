@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <new>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -19,11 +20,31 @@ namespace lockstep::concurrency {
 /// carries a sequence number that tells producers and the consumer whether the
 /// slot is free or full for the current lap, so producers contend only on one
 /// CAS of the enqueue cursor. Design and memory orderings: ADR-0011.
+///
+/// Threading: try_push() may be called from any number of threads
+/// concurrently. try_pop() may be called from exactly one consumer thread
+/// (never concurrently with another try_pop()). Destruction requires every
+/// producer and the consumer to have stopped using the queue (e.g. joined).
+/// try_push() leaves `value` untouched when it fails.
+///
+/// A producer that is preempted between claiming a slot (the CAS in
+/// try_push()) and publishing it (the release store to that slot's
+/// sequence) leaves the slot claimed but not yet visible to the consumer.
+/// Items pushed by other producers into later slots can be fully published
+/// while that slot is still pending, so a try_pop() that reaches the
+/// pending slot sees "empty" even though later items already queued behind
+/// it - the queue is not empty, just transiently stalled on that one
+/// producer. Task 007's idle/parking strategy has to account for this: a
+/// consumer that parks on the first empty try_pop() can sleep through
+/// items that are sitting right behind the stalled slot.
 template <typename T>
 class MpscQueue {
     // try_pop() publishes the slot's sequence before returning its local; a
     // throwing move there (no NRVO) would lose an element already removed
-    // from the ring.
+    // from the ring. try_push()'s move-construct happens after the CAS has
+    // already claimed the slot; a throw there would leave the slot claimed
+    // but never published, stalling the consumer on it forever (see the
+    // Threading note above).
     static_assert(std::is_nothrow_move_constructible_v<T>,
                   "MpscQueue requires a nothrow-move-constructible T");
 
@@ -35,7 +56,7 @@ public:
     explicit MpscQueue(std::size_t capacity)
         : mask_{detail::round_up_capacity(capacity) - 1}, slots_(mask_ + 1) {
         // Lap 0: slot i is free for the first push once its sequence equals
-        // its own index (see push()'s "seq == pos" claim condition).
+        // its own index (see try_push()'s "seq == pos" claim condition).
         for (std::size_t i = 0; i < slots_.size(); ++i) {
             // relaxed: no other thread can see slots_ before construction completes
             slots_[i].sequence.store(i, std::memory_order_relaxed);
@@ -63,8 +84,12 @@ public:
     MpscQueue& operator=(MpscQueue&&) = delete;
 
     [[nodiscard]] bool try_push(T&& value) {
-        // relaxed: just a starting guess for pos; the CAS below is the
-        // actual synchronisation point for claiming a slot.
+        // relaxed: pos is only a hint at which slot to try; it carries no
+        // synchronisation by itself. The CAS below claims the slot by its
+        // atomicity (whichever producer's CAS lands first on a given pos
+        // wins it), and the acquire load of slot.sequence just below is
+        // what actually orders this producer's reuse of the slot after the
+        // consumer's destroy_at() on the element previously stored there.
         std::size_t pos = enqueue_pos_.load(std::memory_order_relaxed);
         for (;;) {
             Slot& slot = slots_[pos & mask_];
@@ -73,7 +98,14 @@ public:
             // (and the destructor that ran on it) is visible before we
             // reuse it.
             const std::size_t seq = slot.sequence.load(std::memory_order_acquire);
-            const auto diff = static_cast<std::ptrdiff_t>(seq) - static_cast<std::ptrdiff_t>(pos);
+            // Unsigned subtraction first (wraps modulo 2^N, well-defined),
+            // then reinterpret the bit pattern as signed: seq - pos never
+            // exceeds the slot count in magnitude, so the result always
+            // fits in ptrdiff_t. static_cast<ptrdiff_t>(seq) - pos would be
+            // UB whenever seq and pos are far enough apart in absolute
+            // value to overflow ptrdiff_t even though their difference
+            // does not.
+            const auto diff = static_cast<std::ptrdiff_t>(seq - pos);
             if (diff == 0) {
                 // Slot looks free for this lap: try to claim it. Losing the
                 // race just means another producer got there first; reload
@@ -107,8 +139,9 @@ public:
         // acquire: pairs with the producer's release store to sequence in
         // try_push(), making the pushed element visible before we read it.
         const std::size_t seq = slot.sequence.load(std::memory_order_acquire);
-        const auto diff =
-            static_cast<std::ptrdiff_t>(seq) - static_cast<std::ptrdiff_t>(dequeue_pos_ + 1);
+        // Unsigned subtraction first, then reinterpret as signed: see the
+        // comment on the equivalent computation in try_push().
+        const auto diff = static_cast<std::ptrdiff_t>(seq - (dequeue_pos_ + 1));
         if (diff != 0) {
             return std::nullopt;  // empty: no producer has published this slot yet
         }
