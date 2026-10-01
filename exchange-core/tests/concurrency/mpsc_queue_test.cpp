@@ -220,10 +220,12 @@ TEST(MpscQueueTest, ProducerStalledBetweenClaimAndPublishTransientlyHidesLaterIt
         BlockingElement(BlockingElement&& other) noexcept
             : tag{other.tag}, entered{other.entered}, release{other.release} {
             if (entered != nullptr) {
+                // release: pairs with the main thread's acquire wait on entered.
                 entered->store(true, std::memory_order_release);
                 entered->notify_all();
             }
             if (release != nullptr) {
+                // acquire: pairs with the main thread's release store to release.
                 release->wait(false, std::memory_order_acquire);
             }
         }
@@ -243,23 +245,29 @@ TEST(MpscQueueTest, ProducerStalledBetweenClaimAndPublishTransientlyHidesLaterIt
     // (gtest assertions are not meant to cross threads).
     std::jthread producer_a([&queue, &a_entered, &a_release, &a_push_ok] {
         BlockingElement element{1, &a_entered, &a_release};
+        // relaxed: the main thread reads it only after join(), which orders it.
         a_push_ok.store(queue.try_push(std::move(element)), std::memory_order_relaxed);
     });
 
+    // acquire: pairs with BlockingElement's release store to entered.
     a_entered.wait(false, std::memory_order_acquire);
     // Happens-after the acquire wait above: producer A's CAS has already
     // claimed its slot and it is now blocked before publishing it.
 
     BlockingElement b{2};
-    ASSERT_TRUE(queue.try_push(std::move(b)));  // claims the next slot, publishes immediately
+    // EXPECT, not ASSERT: returning here would leave producer A blocked and
+    // hang the jthread's join.
+    EXPECT_TRUE(queue.try_push(std::move(b)));  // claims the next slot, publishes immediately
 
     // B's item is fully published, but it sits behind A's claimed-but-not-
     // yet-published slot: try_pop() must report empty, not skip ahead to B.
     EXPECT_FALSE(queue.try_pop().has_value());
 
+    // release: pairs with BlockingElement's acquire wait on release.
     a_release.store(true, std::memory_order_release);
     a_release.notify_all();
     producer_a.join();
+    // relaxed: join() above orders producer A's store before this load.
     EXPECT_TRUE(a_push_ok.load(std::memory_order_relaxed));
 
     auto first = queue.try_pop();

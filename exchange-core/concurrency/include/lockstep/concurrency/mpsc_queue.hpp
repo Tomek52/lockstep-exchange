@@ -98,13 +98,12 @@ public:
             // (and the destructor that ran on it) is visible before we
             // reuse it.
             const std::size_t seq = slot.sequence.load(std::memory_order_acquire);
-            // Unsigned subtraction first (wraps modulo 2^N, well-defined),
-            // then reinterpret the bit pattern as signed: seq - pos never
-            // exceeds the slot count in magnitude, so the result always
-            // fits in ptrdiff_t. static_cast<ptrdiff_t>(seq) - pos would be
-            // UB whenever seq and pos are far enough apart in absolute
-            // value to overflow ptrdiff_t even though their difference
-            // does not.
+            // Only the sign of seq - pos matters. Unsigned subtraction plus
+            // the C++20 modular conversion to ptrdiff_t is well-defined for
+            // any values; subtracting two converted values can overflow. A
+            // stale pos (producer descheduled for several laps) can make the
+            // difference much larger than the slot count, but never near
+            // 2^63, so the sign stays correct.
             const auto diff = static_cast<std::ptrdiff_t>(seq - pos);
             if (diff == 0) {
                 // Slot looks free for this lap: try to claim it. Losing the
