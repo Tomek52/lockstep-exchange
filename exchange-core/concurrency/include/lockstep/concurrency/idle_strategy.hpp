@@ -101,15 +101,16 @@ public:
         // value change" check already handles.
         //
         // libstdc++ 14's std::atomic<uint64_t>::wait/notify is not futex-
-        // native (that needs a 32-bit, address-free word): it goes through a
-        // small shared pool of proxy waiters, keyed by a hash of this
-        // object's address, so distinct Doorbells can collide on the same
-        // proxy and a notify_one() can wake (and immediately re-check) a
-        // thread parked on a different Doorbell. Correctness is unaffected
-        // (every waiter re-checks its own `seen` against its own counter
-        // before blocking again), but it is a measurement item for the
-        // under-load benchmark (task 018), not something this type change
-        // can fix - the Doorbell/ParkingIdle interface is fixed by task 007.
+        // native (that needs a 32-bit word): it goes through a shared pool of
+        // 16 proxy waiters keyed by (address >> 2) % 16. Every Doorbell here
+        // is cache-line aligned, so all of them land in the same bucket. No
+        // wake-up is lost because a notify on a proxy wakes *all* its waiters
+        // (bits/atomic_wait.h, __waiter_pool::_M_notify sets __all when the
+        // address is the proxy's), and each re-checks its own counter. The
+        // cost is a shared seq_cst RMW per ring and spurious wake-ups of other
+        // parked threads. Candidate fix, to measure in task 018: keep
+        // value()'s uint64_t signature but store a std::atomic<std::uint32_t>
+        // counter, which waits on its own address.
         counter_.notify_one();
     }
 

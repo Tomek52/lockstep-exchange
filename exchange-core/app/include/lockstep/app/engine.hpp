@@ -14,6 +14,7 @@
 #include "lockstep/app/publisher.hpp"
 #include "lockstep/app/router.hpp"
 #include "lockstep/app/shard_runtime.hpp"
+#include "lockstep/concurrency/cache_aligned.hpp"
 #include "lockstep/concurrency/idle_strategy.hpp"
 #include "lockstep/domain/risk_state.hpp"
 #include "lockstep/domain/types.hpp"

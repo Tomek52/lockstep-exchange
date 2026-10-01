@@ -11,6 +11,7 @@
 #include "lockstep/app/ports/clock.hpp"
 #include "lockstep/app/ports/journal.hpp"
 #include "lockstep/app/queues.hpp"
+#include "lockstep/concurrency/cache_aligned.hpp"
 #include "lockstep/concurrency/idle_strategy.hpp"
 #include "lockstep/domain/events.hpp"
 #include "lockstep/domain/shard_engine.hpp"
