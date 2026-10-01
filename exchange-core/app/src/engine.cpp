@@ -16,7 +16,8 @@ std::vector<EgressQueue*> egress_queues(const std::vector<std::unique_ptr<ShardR
 std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& config,
                                                        const Router& router,
                                                        JournalFactory& journal_factory,
-                                                       Clock& clock) {
+                                                       Clock& clock,
+                                                       concurrency::Doorbell& publisher_doorbell) {
     if (config.shard_count == 0 || config.shard_count > (1U << 16U)) {
         // Startup-time configuration error: exceptions are fine here (ADR-0008).
         throw std::invalid_argument("shard_count must be in [1, 65536]");
@@ -32,8 +33,8 @@ std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& confi
             .ingress_capacity = config.ingress_capacity,
             .egress_capacity = config.egress_capacity,
         };
-        shards.push_back(
-            std::make_unique<ShardRuntime>(std::move(shard_config), journal_factory(id), clock));
+        shards.push_back(std::make_unique<ShardRuntime>(
+            std::move(shard_config), journal_factory(id), clock, publisher_doorbell));
     }
     return shards;
 }
@@ -42,8 +43,8 @@ std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& confi
 
 Engine::Engine(EngineConfig config, JournalFactory journal_factory, Clock& clock)
     : router_{Router::round_robin(config.instruments, config.shard_count)},
-      shards_{make_shards(config, router_, journal_factory, clock)},
-      publisher_{egress_queues(shards_)} {}
+      shards_{make_shards(config, router_, journal_factory, clock, publisher_doorbell_)},
+      publisher_{egress_queues(shards_), publisher_doorbell_} {}
 
 Engine::~Engine() {
     stop();
@@ -92,10 +93,14 @@ std::expected<void, SubmitError> Engine::submit(domain::Command command, Complet
     if (!shard) {
         return std::unexpected(SubmitError::UnknownInstrument);
     }
-    if (!shards_[shard->value()]->ingress().try_push(
-            InboundCommand{command, std::move(completion)})) {
+    ShardRuntime& target = *shards_[shard->value()];
+    if (!target.ingress().try_push(InboundCommand{command, std::move(completion)})) {
         return std::unexpected(SubmitError::Overloaded);
     }
+    // Ring only after the push is visible, per Doorbell's happens-before
+    // contract (idle_strategy.hpp) - a ring before the push would let a
+    // waiter wake, see nothing, and park again with nothing left to wake it.
+    target.doorbell().ring();
     return {};
 }
 
@@ -108,12 +113,18 @@ std::expected<void, SubmitError> Engine::broadcast(domain::Command command) {
             }
             std::this_thread::yield();
         }
+        shard->doorbell().ring();  // see submit()'s comment
     }
     return {};
 }
 
 const ShardRuntime& Engine::shard(domain::ShardId shard) const {
     return *shards_.at(shard.value());
+}
+
+std::vector<ShardStats> Engine::shard_stats() const {
+    return shards_ | std::views::transform([](const auto& shard) { return shard->stats(); }) |
+           std::ranges::to<std::vector>();
 }
 
 }  // namespace lockstep::app

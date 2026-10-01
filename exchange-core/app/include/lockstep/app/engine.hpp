@@ -14,6 +14,8 @@
 #include "lockstep/app/publisher.hpp"
 #include "lockstep/app/router.hpp"
 #include "lockstep/app/shard_runtime.hpp"
+#include "lockstep/concurrency/cache_aligned.hpp"
+#include "lockstep/concurrency/idle_strategy.hpp"
 #include "lockstep/domain/risk_state.hpp"
 #include "lockstep/domain/types.hpp"
 
@@ -56,8 +58,26 @@ public:
     /// Only valid while stopped (tests compare engine state after replay).
     [[nodiscard]] const ShardRuntime& shard(domain::ShardId shard) const;
 
+    /// Every shard's runtime counters, in shard-id order. Safe to call from
+    /// any thread at any time, including while the engine is running; see
+    /// ShardStats's comment.
+    [[nodiscard]] std::vector<ShardStats> shard_stats() const;
+
 private:
-    Router router_;
+    // Declared before shards_/publisher_: shared by every shard (rung after
+    // a batch is released to egress) and the publisher (parks on it), and
+    // constructing it needs neither - avoids an initialization-order cycle
+    // (Publisher needs the shards' egress queues, so it cannot be built
+    // before shards_; shards need a reference to the publisher's doorbell,
+    // so the doorbell cannot live inside Publisher itself).
+    //
+    // alignas on both this and router_: every shard thread rings this
+    // doorbell, so without separating it from router_ (and the vtable
+    // pointer ahead of it) those cross-thread writes would false-share a
+    // cache line with state the construction-time-only Router and read-mostly
+    // vptr otherwise wouldn't need to bounce (ADR-0011's cache-line rule).
+    alignas(concurrency::cache_line_size) concurrency::Doorbell publisher_doorbell_;
+    alignas(concurrency::cache_line_size) Router router_;
     std::vector<std::unique_ptr<ShardRuntime>> shards_;
     Publisher publisher_;
     std::vector<std::jthread> shard_threads_;

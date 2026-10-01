@@ -1,13 +1,16 @@
 #include "lockstep/app/publisher.hpp"
 
+#include <stop_token>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
 namespace lockstep::app {
 
-Publisher::Publisher(std::vector<EgressQueue*> sources, std::size_t max_batch)
-    : sources_{std::move(sources)}, max_batch_{max_batch} {
+Publisher::Publisher(std::vector<EgressQueue*> sources,
+                     concurrency::Doorbell& doorbell,
+                     std::size_t max_batch)
+    : sources_{std::move(sources)}, doorbell_{doorbell}, max_batch_{max_batch} {
     pending_.reserve(max_batch_);
 }
 
@@ -16,7 +19,10 @@ void Publisher::add_subscriber(EventSubscriber& subscriber) {
 }
 
 void Publisher::run(const std::stop_token& stop) {
-    RuntimeIdle idle;
+    RuntimeIdle idle{doorbell_, stop};
+    // See ShardRuntime::run's identical callback: wakes this thread if it is
+    // parked when stop is requested.
+    const std::stop_callback wake_on_stop{stop, [this] { doorbell_.ring(); }};
     while (!stop.stop_requested()) {
         idle.idle(poll_once());
     }
