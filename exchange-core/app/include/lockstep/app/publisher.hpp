@@ -7,6 +7,7 @@
 #include "lockstep/app/messages.hpp"
 #include "lockstep/app/ports/event_subscriber.hpp"
 #include "lockstep/app/queues.hpp"
+#include "lockstep/concurrency/idle_strategy.hpp"
 
 namespace lockstep::app {
 
@@ -23,7 +24,14 @@ namespace lockstep::app {
 /// slow-consumer policy.
 class Publisher {
 public:
-    explicit Publisher(std::vector<EgressQueue*> sources, std::size_t max_batch = 1024);
+    /// `doorbell` is rung by each shard once per released batch (task 007),
+    /// so this constructor does not own it - Engine owns one Doorbell shared
+    /// by every shard and the publisher, to avoid the construction-order
+    /// cycle a Publisher-owned doorbell would create (shards need a
+    /// reference to it, but Publisher needs the shards' egress queues).
+    Publisher(std::vector<EgressQueue*> sources,
+              concurrency::Doorbell& doorbell,
+              std::size_t max_batch = 1024);
 
     /// Must be called before the publisher thread starts.
     void add_subscriber(EventSubscriber& subscriber);
@@ -37,6 +45,7 @@ private:
     void flush_events();
 
     std::vector<EgressQueue*> sources_;
+    concurrency::Doorbell& doorbell_;
     std::vector<EventSubscriber*> subscribers_;
     std::vector<PublishedEvent> pending_;
     std::size_t max_batch_;

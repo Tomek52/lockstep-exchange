@@ -14,6 +14,7 @@
 #include "lockstep/app/publisher.hpp"
 #include "lockstep/app/router.hpp"
 #include "lockstep/app/shard_runtime.hpp"
+#include "lockstep/concurrency/idle_strategy.hpp"
 #include "lockstep/domain/risk_state.hpp"
 #include "lockstep/domain/types.hpp"
 
@@ -56,7 +57,19 @@ public:
     /// Only valid while stopped (tests compare engine state after replay).
     [[nodiscard]] const ShardRuntime& shard(domain::ShardId shard) const;
 
+    /// Every shard's runtime counters, in shard-id order. Safe to call from
+    /// any thread at any time, including while the engine is running; see
+    /// ShardStats's comment.
+    [[nodiscard]] std::vector<ShardStats> shard_stats() const;
+
 private:
+    // Declared before shards_/publisher_: shared by every shard (rung after
+    // a batch is released to egress) and the publisher (parks on it), and
+    // constructing it needs neither - avoids an initialization-order cycle
+    // (Publisher needs the shards' egress queues, so it cannot be built
+    // before shards_; shards need a reference to the publisher's doorbell,
+    // so the doorbell cannot live inside Publisher itself).
+    concurrency::Doorbell publisher_doorbell_;
     Router router_;
     std::vector<std::unique_ptr<ShardRuntime>> shards_;
     Publisher publisher_;

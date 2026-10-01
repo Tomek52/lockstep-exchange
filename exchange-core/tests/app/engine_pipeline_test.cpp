@@ -1,6 +1,8 @@
 // Walking-skeleton test of the threaded pipeline:
 // submit -> ingress -> shard (journal, apply) -> egress -> publisher -> completion.
+#include <chrono>
 #include <future>
+#include <thread>
 #include <variant>
 
 #include <gtest/gtest.h>
@@ -98,6 +100,57 @@ TEST_F(EnginePipelineTest, BroadcastReachesEveryShard) {
 TEST_F(EnginePipelineTest, SubmitAfterStopIsRefused) {
     engine.stop();
     EXPECT_EQ(engine.submit(buy(InstrumentId{1}), {}).error(), SubmitError::ShuttingDown);
+}
+
+// task 007: idle/parking strategy and runtime statistics.
+
+TEST_F(EnginePipelineTest, StatsReflectCommandsBatchesAndMaxBatch) {
+    for (int i = 0; i < 5; ++i) {
+        auto [completion, reply] = test::reply_future();
+        ASSERT_TRUE(engine.submit(buy(InstrumentId{2}), std::move(completion)).has_value());
+        ASSERT_EQ(reply.wait_for(test::reply_timeout), std::future_status::ready);
+    }
+    engine.stop();
+
+    const std::vector<ShardStats> stats = engine.shard_stats();
+    ASSERT_EQ(stats.size(), 2U);
+
+    // Shard 0 (instrument 1) never received a command in this test.
+    EXPECT_EQ(stats[0].commands, 0U);
+    EXPECT_EQ(stats[0].batches, 0U);
+    EXPECT_EQ(stats[0].max_batch, 0U);
+
+    // Shard 1 (instrument 2) processed exactly the 5 submitted commands,
+    // each one waited for individually, so in at least one and at most
+    // five batches (the shard may or may not coalesce a next command that
+    // arrives before it next polls).
+    EXPECT_EQ(stats[1].commands, 5U);
+    EXPECT_GE(stats[1].batches, 1U);
+    EXPECT_LE(stats[1].batches, 5U);
+    EXPECT_GE(stats[1].max_batch, 1U);
+    EXPECT_LE(stats[1].max_batch, 5U);
+    // batches * max_batch can't under-cover every command.
+    EXPECT_GE(stats[1].batches * stats[1].max_batch, stats[1].commands);
+}
+
+TEST_F(EnginePipelineTest, IdleShardParksRatherThanPolling) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    const std::vector<ShardStats> stats = engine.shard_stats();
+    engine.stop();
+
+    // A thread that is truly parked wakes only a handful of times in 200ms
+    // of silence (startup, maybe a spurious wake); one that is still
+    // polling in a tight loop would rack up thousands.
+    for (const ShardStats& shard_stats : stats) {
+        EXPECT_LE(shard_stats.parks, 5U);
+    }
+}
+
+TEST_F(EnginePipelineTest, StopReturnsPromptlyOnIdleEngine) {
+    const auto start = std::chrono::steady_clock::now();
+    engine.stop();
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    EXPECT_LT(elapsed, std::chrono::milliseconds{100});
 }
 
 }  // namespace

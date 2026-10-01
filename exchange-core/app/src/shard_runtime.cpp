@@ -1,5 +1,6 @@
 #include "lockstep/app/shard_runtime.hpp"
 
+#include <stop_token>
 #include <thread>
 #include <utility>
 
@@ -7,25 +8,46 @@
 
 namespace lockstep::app {
 
-ShardRuntime::ShardRuntime(const Config& config, std::unique_ptr<Journal> journal, Clock& clock)
+ShardRuntime::ShardRuntime(const Config& config,
+                           std::unique_ptr<Journal> journal,
+                           Clock& clock,
+                           concurrency::Doorbell& publisher_doorbell)
     : engine_{config.shard},
       journal_{std::move(journal)},
       clock_{clock},
       max_batch_{config.max_batch},
       ingress_{config.ingress_capacity},
-      egress_{config.egress_capacity} {
+      egress_{config.egress_capacity},
+      publisher_doorbell_{publisher_doorbell} {
     staged_.reserve(max_batch_ * 4);
 }
 
 void ShardRuntime::run(const std::stop_token& stop) {
-    RuntimeIdle idle;
+    RuntimeIdle idle{doorbell_, stop};
+    // Wakes this thread if it is parked when stop is requested: request_stop()
+    // by itself does not touch the doorbell, so a thread idling on empty
+    // ingress would otherwise never re-check stop_requested() (ADR-0003's
+    // shutdown protocol needs this thread to notice promptly).
+    const std::stop_callback wake_on_stop{stop, [this] { doorbell_.ring(); }};
     while (!stop.stop_requested()) {
         idle.idle(poll_once());
+        // relaxed: diagnostic only, see ShardStats's comment.
+        parks_stat_.store(idle.parks(), std::memory_order_relaxed);
     }
     // Producers were stopped before us (Engine shutdown protocol), so draining
     // until empty loses nothing.
     while (poll_once() > 0) {
     }
+}
+
+ShardStats ShardRuntime::stats() const noexcept {
+    // relaxed: see ShardStats's comment.
+    return ShardStats{
+        .commands = commands_stat_.load(std::memory_order_relaxed),
+        .batches = batches_stat_.load(std::memory_order_relaxed),
+        .max_batch = max_batch_stat_.load(std::memory_order_relaxed),
+        .parks = parks_stat_.load(std::memory_order_relaxed),
+    };
 }
 
 std::size_t ShardRuntime::poll_once() {
@@ -43,6 +65,13 @@ std::size_t ShardRuntime::poll_once() {
             fatal(to_string(committed.error()));
         }
         release_staged();
+        // relaxed: diagnostic only, see ShardStats's comment. Single writer
+        // (this thread), so fetch_add/load+store need no stronger ordering.
+        commands_stat_.fetch_add(processed, std::memory_order_relaxed);
+        batches_stat_.fetch_add(1, std::memory_order_relaxed);
+        if (processed > max_batch_stat_.load(std::memory_order_relaxed)) {
+            max_batch_stat_.store(processed, std::memory_order_relaxed);
+        }
     }
     return processed;
 }
@@ -78,6 +107,10 @@ void ShardRuntime::release_staged() {
         }
     }
     staged_.clear();
+    // Ring once per batch, after every item in it is visible on egress - not
+    // once per item, since the publisher only needs to know "there is more
+    // to drain", not how much.
+    publisher_doorbell_.ring();
 }
 
 }  // namespace lockstep::app

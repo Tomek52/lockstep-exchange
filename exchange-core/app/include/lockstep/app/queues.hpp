@@ -10,13 +10,15 @@ namespace lockstep::app {
 
 // The single place where the runtime's queue and idle types are chosen.
 //
-// SKELETON: task 007 still revisits the idle strategy. The concept checks
-// below make each swap a one-line change that cannot pick a queue with the
-// wrong producer policy.
+// The concept checks below make each swap a one-line change that cannot pick
+// a queue with the wrong producer policy.
 
 using IngressQueue = concurrency::MpscQueue<InboundCommand>;
 using EgressQueue = concurrency::SpscQueue<OutboundItem>;
-using RuntimeIdle = concurrency::BackoffIdle;
+// ParkingIdle (task 007): parks on a Doorbell instead of BackoffIdle's fixed
+// sleep_for, so an idle thread uses no CPU and wakes as soon as a producer
+// rings rather than up to one sleep period late.
+using RuntimeIdle = concurrency::ParkingIdle;
 
 static_assert(concurrency::MultiProducerQueue<IngressQueue>,
               "ingress has many producers: gRPC threads and the risk client");
