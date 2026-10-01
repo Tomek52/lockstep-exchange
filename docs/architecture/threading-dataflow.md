@@ -51,7 +51,32 @@ flowchart LR
 | gRPC callback threads | nothing | network | shard ingress (MPSC) |
 | risk client callbacks | nothing | Monitor stream | every shard ingress (broadcast) |
 | shard *k* | `ShardEngine` *k* (books, risk state), journal *k*, sequence counter | ingress *k* | egress *k* (SPSC) |
-| publisher | subscriber buffers | all egress queues | subscribers, completions |
+| publisher | `subscriptions_` list, `Subscription` control queue | all egress queues, subscription control queue (MPSC) | `EventSubscriber`s, `Subscription` rings, completions |
+
+### Runtime subscriptions (task 011)
+
+`Engine::subscribe(filter, capacity)` lets any thread register a
+`Subscription` while the engine is running - a bounded, per-consumer SPSC
+ring plus a `SubscriptionFilter` (instruments, and trades/book-updates/
+private-events flags). Registration cannot touch `subscriptions_` directly
+from the calling thread (that list is the publisher's alone, same
+single-writer rule as everything else here), so `subscribe()` instead
+pushes the new `Subscription` through a small bounded MPSC control queue and
+rings the publisher's doorbell; the publisher drains that queue at the very
+start of every `poll_once()`, before it can deliver anything from this
+iteration's egress items - the ordering the atomicity acceptance criterion
+needs: a subscription already in `subscriptions_` before the first event of
+a command is flushed either gets the whole command's events or none of them,
+never a partial command, and never one flushed before it registered.
+
+A subscriber that stops polling fills its ring; the publisher never blocks
+on it (ADR-0006's slow-consumer policy). The moment a push to a
+subscription's ring fails, that `Subscription` is marked `overflowed()`
+(no further events are delivered to it) and its `on_ready()` hook, if any,
+fires once; the publisher drops it from `subscriptions_` on its next
+`poll_once()` iteration. `EventSubscriber`/`add_subscriber()` - synchronous,
+registered only before `start()` - is unchanged and still the risk client's
+path.
 
 ## Life of an order
 
@@ -171,3 +196,5 @@ signal handler ever runs concurrently with the runtime.
 | MPSC slot sequences, `enqueue_pos_` | task 006 | acquire/release + relaxed CAS | See ADR-0011 |
 | `Doorbell::counter_` | `concurrency/idle_strategy.hpp`, task 007 | acquire/release | `ring()` must happen-before whatever a waiter observes once woken |
 | `ShardStats` counters | `app/shard_runtime.{hpp,cpp}`, task 007 | relaxed | Diagnostic only; single writer (the shard thread), read from any thread |
+| `Subscription::cancelled_`/`overflowed_` | `app/subscription.{hpp,cpp}`, task 011 | relaxed | Pure signal flags; the ring's own SpscQueue acquire/release already orders its contents independently |
+| `Subscription::on_ready_` | `app/subscription.{hpp,cpp}`, task 011 | release (set) / acquire (invoke) | Publishes the callback's captured state before the publisher thread invokes it |
