@@ -40,15 +40,16 @@ struct SubscriptionFilter {
 /// the public members concurrently with that, which is the same threading
 /// shape SpscQueue itself requires.
 ///
-/// Registration takes effect only once the publisher thread drains this
-/// subscription off its control queue (Publisher::drain_control()) -
-/// Engine::subscribe/Publisher::subscribe return as soon as the request is
-/// queued, not once it is applied. At that later moment, the publisher
-/// stamps a per-shard starting point, and only events with a strictly later
-/// per-shard sequence are ever delivered (`wants()`'s doc) - so a
-/// subscription never sees any part of a command that was already (even
-/// partly) flushed to other subscribers before it registered, and always
-/// sees every event of a command that starts afterwards.
+/// Engine::subscribe/Publisher::subscribe block until registration has
+/// actually taken effect before returning this object - never hand back a
+/// Subscription whose registration is only queued, not yet applied (see
+/// Publisher::subscribe's doc for why and the bounded wait that enforces
+/// it). At the moment registration is applied, a per-shard starting point
+/// is stamped, and only events with a strictly later per-shard sequence are
+/// ever delivered (`wants()`'s doc) - so a subscription never sees any part
+/// of a command that was already (even partly) flushed to other
+/// subscribers before it registered, and always sees every event of a
+/// command that starts afterwards.
 ///
 /// A subscription that overflows or is cancelled is never destroyed from
 /// inside Publisher: both the consumer and the publisher hold a shared_ptr

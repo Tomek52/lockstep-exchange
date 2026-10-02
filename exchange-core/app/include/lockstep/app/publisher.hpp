@@ -3,7 +3,9 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <stop_token>
+#include <thread>
 #include <vector>
 
 #include "lockstep/app/messages.hpp"
@@ -82,19 +84,32 @@ public:
 
     /// Registers a new Subscription and returns the consumer's handle to it,
     /// blocking (a spin, never a park - typically well under one publisher
-    /// iteration) until the publisher has acknowledged the registration (see
-    /// the class comment for why that handshake, not just handing the
-    /// request off, is required). Thread-safe from any thread *except* the
-    /// publisher thread itself - calling this from inside a completion or an
-    /// on_ready() hook would deadlock, since nothing else ever drives
-    /// drain_control() to acknowledge it.
+    /// iteration) until the registration has taken effect (see the class
+    /// comment for why that handshake, not just handing the request off, is
+    /// required). Thread-safe from any thread *except* the publisher thread
+    /// itself - calling this from inside a completion or an on_ready() hook
+    /// would deadlock, since nothing else ever drives the acknowledgement.
+    /// That specific case is an invariant violation, not just a long wait:
+    /// it calls fatal() immediately instead of spinning forever
+    /// (concurrency review, round 3 - a reactor subscribing from its own
+    /// completion is a realistic mistake, and the resulting deadlock would
+    /// silently wedge every shard too, via egress back-pressure, ADR-0003).
     ///
-    /// Before the publisher thread has ever started running(), nothing
-    /// drains the control queue at all, so a call made then blocks until
-    /// run() does (and, if the queue also happens to be at capacity already,
-    /// until run() drains far enough to make room - mirrors every other
-    /// producer-side queue in this runtime, e.g. Engine::submit() before
-    /// start(), and is not specific to subscribe()).
+    /// Before the publisher thread has ever started running(), there is no
+    /// publisher thread to send this through the control queue and wait on,
+    /// and blocking here while run() has not even been called yet would
+    /// deadlock a caller that does `engine.subscribe(...); engine.start();`
+    /// on one thread (a real pattern: wiring up a subscriber before opening
+    /// the engine for traffic). So this case registers directly, on the
+    /// calling thread, under `pre_start_mutex_` - safe because nothing else
+    /// touches `subscriptions_` until `run()` takes that same mutex once, at
+    /// its very start, to flip `started_`: any subscribe() call already
+    /// holding the mutex (or that acquired it first) finishes registering
+    /// directly before run() can proceed past that point, and any call that
+    /// acquires the mutex afterwards sees `started_` already true and takes
+    /// the normal control-queue path below instead. This is the only
+    /// pre-start path through `subscriptions_`; once `started_` is true,
+    /// only the publisher thread ever touches it again (ADR-0003).
     ///
     /// If the publisher thread has already returned from run(), or does so
     /// while this call is still waiting, this returns an already-closed
@@ -110,6 +125,13 @@ public:
     /// already registered (and therefore already closed, if shutdown reached
     /// it) by the time stopped_ becomes visible, or never will be, in which
     /// case this call closes it itself.
+    ///
+    /// Calling Engine::stop() when start() was never called first is also
+    /// safe, though not via stopped_: run() never executes, so stopped_
+    /// stays false forever, but so does started_ - every later subscribe()
+    /// still takes the pre-start path above and registers directly, rather
+    /// than reaching the stopped_ checks below at all (concurrency review,
+    /// round 3).
     std::shared_ptr<Subscription> subscribe(SubscriptionFilter filter, std::size_t capacity);
 
     /// Thread body. Returns after `stop` is requested and all sources are
@@ -148,6 +170,28 @@ private:
     // just synchronise with each other, and acquire/release does not give
     // that - only a single total order (seq_cst) does.
     std::atomic<bool> stopped_{false};
+    // Guards the pre-start registration path only (subscribe()'s doc) - a
+    // plain bool, not an atomic, because every access to it already holds
+    // this mutex. Not used once started_ is true: from then on
+    // subscriptions_ is touched only by the publisher thread (ADR-0003),
+    // and subscribe() never looks at either of these two members again.
+    std::mutex pre_start_mutex_;
+    bool started_{false};
+    // Set at the very start of run(), before anything that could call back
+    // into subscribe() (e.g. a completion) - lets subscribe() recognise and
+    // fatal() on the one caller it can never serve: itself. relaxed on both
+    // sides: the only read that matters for correctness is the publisher
+    // thread reading its own prior write, which is trivially ordered
+    // same-thread; other threads' id never equals this one, so they cannot
+    // misread a not-yet-visible store into a false positive, only (briefly)
+    // miss a true one - and a call that slips through that window takes the
+    // normal control-queue wait instead, which is still correct, just not
+    // instant. Reset back to the default "no thread" value at the end of
+    // run() (before this thread actually terminates): a terminated thread's
+    // id is not guaranteed unique forever - the OS can hand it to a later,
+    // unrelated thread - so leaving the real id in place past this point
+    // could make some future thread alias it and be wrongly fatal()'d.
+    std::atomic<std::thread::id> publisher_thread_id_;
 };
 
 }  // namespace lockstep::app

@@ -6,6 +6,8 @@
 #include <utility>
 #include <variant>
 
+#include "lockstep/app/fatal.hpp"
+
 namespace lockstep::app {
 
 Publisher::Publisher(std::vector<EgressQueue*> sources,
@@ -24,7 +26,36 @@ void Publisher::add_subscriber(EventSubscriber& subscriber) {
 
 std::shared_ptr<Subscription> Publisher::subscribe(SubscriptionFilter filter,
                                                    std::size_t capacity) {
+    // Fail fast instead of spinning forever: if run() has started, nothing
+    // but the publisher thread itself ever drives the registration
+    // handshake this call waits on below, so calling it from that thread
+    // (e.g. from inside a completion or an on_ready() hook) can never make
+    // progress (see the doc above). publisher_thread_id_ is still its
+    // default-constructed "no thread" value before run() ever runs, which
+    // never compares equal to a real thread's id, so this is a no-op for
+    // every pre-start call.
+    if (std::this_thread::get_id() == publisher_thread_id_.load(std::memory_order_relaxed)) {
+        fatal(
+            "Publisher::subscribe() called from the publisher thread itself "
+            "(e.g. from a completion or an on_ready() hook) - this would "
+            "deadlock, since nothing else drives the registration handshake "
+            "it waits on");
+    }
     auto subscription = std::make_shared<Subscription>(std::move(filter), capacity);
+    {
+        const std::lock_guard<std::mutex> lock(pre_start_mutex_);
+        if (!started_) {
+            // No publisher thread exists yet to send this through control_
+            // and wait on - register directly instead (see subscribe()'s
+            // doc for why this is race-free against a concurrent start()).
+            // last_sequence_ is still all zeros at this point (nothing has
+            // run yet to advance it), which is the correct cutoff: this
+            // subscription sees every event from here on.
+            subscription->set_start_sequence(last_sequence_);
+            subscriptions_.push_back(subscription);
+            return subscription;
+        }
+    }
     // seq_cst: paired with the seq_cst store in run() - see stopped_'s doc.
     // stopped_ is set only after run() has closed every subscription it
     // still knows about; a true result here means nothing will ever drain
@@ -86,6 +117,21 @@ std::shared_ptr<Subscription> Publisher::subscribe(SubscriptionFilter filter,
 }
 
 void Publisher::run(const std::stop_token& stop) {
+    // relaxed: see the member's doc - only this thread's own later reads of
+    // its own earlier write need to see it, which same-thread program order
+    // already guarantees.
+    publisher_thread_id_.store(std::this_thread::get_id(), std::memory_order_relaxed);
+    {
+        // Closes the pre-start registration window (subscribe()'s doc): any
+        // subscribe() call already holding pre_start_mutex_, or that
+        // acquires it before this one, finishes registering directly into
+        // subscriptions_ before this thread is allowed to proceed past this
+        // point; any call that acquires it afterwards sees started_ already
+        // true and takes the control-queue path instead. Either way,
+        // subscriptions_ never has two writers.
+        const std::lock_guard<std::mutex> lock(pre_start_mutex_);
+        started_ = true;
+    }
     RuntimeIdle idle{doorbell_, stop};
     // See ShardRuntime::run's identical callback: wakes this thread if it is
     // parked when stop is requested.
@@ -105,6 +151,15 @@ void Publisher::run(const std::stop_token& stop) {
     for (const std::shared_ptr<Subscription>& subscription : subscriptions_) {
         subscription->close();
     }
+    // Reset before this thread actually terminates: std::thread::id values
+    // are only guaranteed unique among *currently running* threads (the
+    // standard allows a terminated thread's id to be reused by a later
+    // one), so leaving the real id in place here could make some future,
+    // unrelated thread alias it and get wrongly fatal()'d by subscribe()'s
+    // guard (found by this round's own regression test reusing a thread
+    // that happened to recycle the just-joined publisher thread's id).
+    // relaxed: see the member's doc.
+    publisher_thread_id_.store(std::thread::id{}, std::memory_order_relaxed);
     stopped_.store(true, std::memory_order_seq_cst);  // seq_cst: see subscribe()'s checks
 }
 

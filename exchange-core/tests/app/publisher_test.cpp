@@ -68,6 +68,28 @@ bool wait_until(Pred predicate, std::chrono::milliseconds timeout = std::chrono:
     return true;
 }
 
+// Runs `body` on a helper thread and reports whether it returned within
+// `limit`, instead of letting a regression hang the whole test binary
+// (concurrency review, round 3: every hang regression below needs a bounded
+// wait, not a raw blocking call). A body that never returns leaks its
+// thread (detach()) - acceptable for a handful of process-lifetime test
+// failures, never for passing runs.
+template <typename F>
+bool completes_within(F body, std::chrono::milliseconds limit = std::chrono::seconds{5}) {
+    auto done = std::make_shared<std::atomic<bool>>(false);
+    std::thread worker{[done, body = std::move(body)]() mutable {
+        body();
+        done->store(true, std::memory_order_release);
+    }};
+    const bool finished = wait_until([&] { return done->load(std::memory_order_acquire); }, limit);
+    if (finished) {
+        worker.join();
+    } else {
+        worker.detach();
+    }
+    return finished;
+}
+
 class PublisherSubscriptionTest : public ::testing::Test {
 protected:
     ManualClock clock{1'000, 10};
@@ -512,9 +534,13 @@ TEST(PublisherPartialCommandRegression, CommandPushedAfterSubscribeReturnsIsDeli
         });
     }
 
-    auto event = [](std::uint64_t sequence) {
+    auto event1 = [](std::uint64_t sequence) {
         return PublishedEvent{ShardId{0}, SequenceNumber{sequence}, Timestamp{1},
                               accepted_event(InstrumentId{1})};
+    };
+    auto event2 = [](std::uint64_t sequence) {
+        return PublishedEvent{ShardId{0}, SequenceNumber{sequence}, Timestamp{1},
+                              level_changed_event(InstrumentId{1})};
     };
 
     int missed = 0;
@@ -522,25 +548,46 @@ TEST(PublisherPartialCommandRegression, CommandPushedAfterSubscribeReturnsIsDeli
     for (std::uint64_t k = 1; k <= iterations; ++k) {
         auto sub =
             publisher.subscribe(SubscriptionFilter{.instruments = {}, .private_events = true}, 8);
+        // subscribe() is documented to block until registration has
+        // actually taken effect - check that directly, not just infer it
+        // from delivery below (code review item 4).
+        EXPECT_TRUE(sub->is_registered());
         // subscribe() has returned: everything below is "after registration".
-        while (!egress.try_push(OutboundItem{event(k)})) {
+        // Two events for this one command, same as a real OrderAccepted +
+        // BookLevelChanged pair: a fix that only kept the FIRST event of a
+        // sequence from being dropped (rather than the whole command) would
+        // not be caught by asserting on just one.
+        while (!egress.try_push(OutboundItem{event1(k)})) {
+            bell.ring();
+            std::this_thread::yield();
+        }
+        while (!egress.try_push(OutboundItem{event2(k)})) {
             bell.ring();
             std::this_thread::yield();
         }
         bell.ring();
 
-        bool got = false;
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{200};
-        while (!got && std::chrono::steady_clock::now() < deadline) {
+        bool got_first = false;
+        bool got_second = false;
+        // Widened from 200ms: under the background CPU load this suite is
+        // stressed with (definition-of-done run), noise_threads alone can
+        // starve this poller for longer than that without anything actually
+        // being lost.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{2000};
+        while (!(got_first && got_second) && std::chrono::steady_clock::now() < deadline) {
             const std::size_t n = sub->poll(std::span{buf});
             for (std::size_t i = 0; i < n; ++i) {
-                got |= buf[i].sequence == SequenceNumber{k};
+                if (buf[i].sequence != SequenceNumber{k}) {
+                    continue;
+                }
+                got_first |= std::holds_alternative<OrderAccepted>(buf[i].event);
+                got_second |= std::holds_alternative<BookLevelChanged>(buf[i].event);
             }
-            if (!got) {
+            if (!(got_first && got_second)) {
                 std::this_thread::yield();
             }
         }
-        if (!got) {
+        if (!(got_first && got_second)) {
             ++missed;
         }
         sub->cancel();
@@ -616,6 +663,79 @@ TEST_F(PublisherSubscriptionTest, SecondOnReadyCallIsRejected) {
     auto sub = engine.subscribe(SubscriptionFilter{}, 64);
     ASSERT_TRUE(sub->on_ready([]() noexcept {}));
     EXPECT_FALSE(sub->on_ready([]() noexcept {}));
+}
+
+// --- Regression (concurrency review, round 3): notify_ready() must not
+// have a fast path that reads on_ready_ with anything weaker than the
+// seq_cst sequence on_ready()'s install uses, or "install the hook, then
+// immediately poll" becomes a classic store-buffering lost wake-up - two
+// threads each write their own atomic and read the other's, and relaxed
+// orderings let both see only the pre-write value. One Subscription, reused
+// across many short rounds (one deliver()+notify_ready() racing one
+// on_ready()+poll()) with a fresh on_ready install every round, so a lost
+// wake-up shows up as neither the hook firing nor the poll seeing data. ---
+TEST(PublisherSubscriptionConcurrency, OnReadyNeverLosesAWakeUpUnderRacingInstall) {
+    constexpr int rounds = 200'000;
+    const PublishedEvent event{ShardId{0}, SequenceNumber{1}, Timestamp{1},
+                               accepted_event(InstrumentId{1})};
+
+    std::atomic<int> round{-1};
+    std::atomic<int> deliver_done{-1};
+    std::atomic<int> poll_done{-1};
+    std::atomic<Subscription*> current{nullptr};
+    std::atomic<bool> fired{false};
+    std::atomic<std::size_t> last_poll_count{0};
+
+    // on_ready() is set-once per Subscription (by design - see its doc), so
+    // a fresh one is needed every round, same as sb.cpp's own reproduction:
+    // a Subscription reused across rounds would just hit that rejection on
+    // round 2, not the race this test is about.
+    std::jthread deliverer{[&] {
+        for (int r = 0; r < rounds; ++r) {
+            while (round.load(std::memory_order_acquire) != r) {
+                std::this_thread::yield();
+            }
+            Subscription* sub = current.load(std::memory_order_acquire);
+            (void)sub->deliver(event);
+            sub->notify_ready();
+            deliver_done.store(r, std::memory_order_release);
+        }
+    }};
+    std::jthread poller{[&] {
+        std::vector<PublishedEvent> buf(4);
+        for (int r = 0; r < rounds; ++r) {
+            while (round.load(std::memory_order_acquire) != r) {
+                std::this_thread::yield();
+            }
+            Subscription* sub = current.load(std::memory_order_acquire);
+            (void)sub->on_ready(
+                [&fired]() noexcept { fired.store(true, std::memory_order_relaxed); });
+            last_poll_count.store(sub->poll(std::span{buf}), std::memory_order_release);
+            poll_done.store(r, std::memory_order_release);
+        }
+    }};
+
+    int lost = 0;
+    for (int r = 0; r < rounds; ++r) {
+        auto sub = std::make_unique<Subscription>(SubscriptionFilter{}, 8);
+        sub->set_start_sequence({SequenceNumber{0}});
+        fired.store(false, std::memory_order_relaxed);
+        current.store(sub.get(), std::memory_order_release);
+        round.store(r, std::memory_order_release);
+        while (deliver_done.load(std::memory_order_acquire) != r ||
+               poll_done.load(std::memory_order_acquire) != r) {
+            std::this_thread::yield();
+        }
+        const bool saw_data = last_poll_count.load(std::memory_order_acquire) > 0;
+        const bool saw_fire = fired.load(std::memory_order_relaxed);
+        if (!saw_data && !saw_fire) {
+            ++lost;
+        }
+    }
+
+    deliverer.join();
+    poller.join();
+    EXPECT_EQ(lost, 0) << "of " << rounds << " rounds";
 }
 
 TEST_F(PublisherSubscriptionTest, ReplacingOnReadyUnderTrafficNeverRacesNotify) {
@@ -713,6 +833,244 @@ TEST_F(PublisherSubscriptionTest, SubscribeAfterStopReturnsClosedInsteadOfHangin
     EXPECT_TRUE(sub->overflowed());
     std::vector<PublishedEvent> buf(4);
     EXPECT_EQ(sub->poll(std::span{buf}), 0U);
+}
+
+// --- Regression (code review): subscribe() called before start() must not
+// block forever - there is no publisher thread yet to drain the control
+// queue and acknowledge the registration. A caller that does
+// `engine.subscribe(...); engine.start();` on one thread (wiring up a
+// subscriber before opening the engine to traffic, a real pattern) would
+// otherwise deadlock itself. ---
+
+TEST(PublisherSubscriptionPreStart, SubscribeBeforeStartThenStartDeliversInFull) {
+    ManualClock clock{1'000, 10};
+    test::MemoryJournals journals;
+    Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}}, .shard_count = 1},
+                  journals.factory(), clock};
+
+    // Engine::start() has not been called yet - this must still return
+    // (not hang) and the subscription must still work once the engine does
+    // start.
+    auto sub = engine.subscribe(SubscriptionFilter{.instruments = {}, .private_events = true}, 64);
+    EXPECT_TRUE(sub->is_registered());
+
+    engine.start();
+
+    auto [completion, reply] = test::reply_future();
+    ASSERT_TRUE(engine.submit(buy(InstrumentId{1}), std::move(completion)).has_value());
+    ASSERT_EQ(reply.wait_for(test::reply_timeout), std::future_status::ready);
+
+    // Checked before engine.stop(): Publisher::run's shutdown closes every
+    // still-registered subscription (same observable effect as overflow),
+    // which would make overflowed() legitimately true for an unrelated
+    // reason after that point.
+    std::vector<PublishedEvent> buf(16);
+    const std::size_t n = sub->poll(std::span{buf});
+    ASSERT_EQ(n, 2U);
+    EXPECT_TRUE(std::holds_alternative<OrderAccepted>(buf[0].event));
+    EXPECT_TRUE(std::holds_alternative<BookLevelChanged>(buf[1].event));
+    EXPECT_FALSE(sub->overflowed());
+
+    engine.stop();
+}
+
+// Same scenario as above, but bounded: if the pre-start direct-registration
+// path ever regresses back to blocking before a publisher thread exists,
+// this fails instead of hanging the whole test binary (concurrency-auditor
+// round 3, r3_test.cpp's pattern).
+TEST(PublisherSubscriptionPreStart, SubscribeThenStartOnOneThreadCompletes) {
+    EXPECT_TRUE(completes_within([] {
+        ManualClock clock{1'000, 10};
+        test::MemoryJournals journals;
+        Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}}, .shard_count = 1},
+                      journals.factory(), clock};
+        auto sub = engine.subscribe({}, 8);
+        engine.start();
+        engine.stop();
+    }));
+}
+
+// --- Regression (concurrency-auditor round 3, MEDIUM 1): Engine::stop()
+// without a preceding start() never runs the publisher thread, so
+// Publisher::stopped_ is never set by run()'s shutdown path. subscribe()
+// must still not hang in that case - it never reaches the stopped_ checks
+// at all, because started_ is also never set, so every call takes the
+// pre-start direct-registration path (see subscribe()'s doc). ---
+TEST(PublisherSubscriptionPreStart, SubscribeAfterStopWithoutStartCompletes) {
+    EXPECT_TRUE(completes_within([] {
+        ManualClock clock{1'000, 10};
+        test::MemoryJournals journals;
+        Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}}, .shard_count = 1},
+                      journals.factory(), clock};
+        engine.stop();
+        auto sub = engine.subscribe({}, 8);
+        EXPECT_TRUE(sub->is_registered());
+    }));
+}
+
+// --- Regression (concurrency-auditor round 3, MEDIUM 2): subscribe() called
+// from the publisher thread itself (e.g. from inside a completion) can
+// never be served - nothing else drives the registration handshake it
+// would otherwise wait on, and the wait would also wedge every shard via
+// egress back-pressure (ADR-0003). Publisher::subscribe() fails fast
+// (fatal(), which aborts) instead of deadlocking. ---
+// Out-of-line (not a lambda passed to EXPECT_DEATH directly): the macro's
+// argument parser only tracks parentheses, not braces or structured-binding
+// brackets, so a statement with top-level commas - e.g. `auto [a, b] = ...`
+// - splits across "arguments" it does not actually have.
+void subscribe_from_publisher_thread() {
+    ManualClock clock{1'000, 10};
+    test::MemoryJournals journals;
+    Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}}, .shard_count = 1},
+                  journals.factory(), clock};
+    engine.start();
+    // No need to wait for the reply: the process aborts from inside the
+    // completion below before it could ever be set. A plain sleep bounds
+    // how long this child can run if the guard ever regresses.
+    (void)engine.submit(buy(InstrumentId{1}), [&engine](const CommandReply&) noexcept {
+        // Runs on the publisher thread (Publisher::poll_once() invokes
+        // completions inline) - exactly the case this guard exists for.
+        (void)engine.subscribe({}, 8);
+    });
+    std::this_thread::sleep_for(std::chrono::seconds{5});
+}
+
+TEST(PublisherSubscriptionPreStart, SubscribeFromPublisherThreadAborts) {
+    // Everything - including starting the Engine's background threads - runs
+    // inside the forked child (EXPECT_DEATH forks here): gtest's death tests
+    // document that forking a process with other threads already running is
+    // unsafe (a thread that existed only in the parent vanishes from the
+    // child mid-whatever it was doing, locks included). Building the Engine
+    // only in subscribe_from_publisher_thread(), called from inside the
+    // statement, sidesteps that entirely.
+    EXPECT_DEATH(subscribe_from_publisher_thread(), "");
+}
+
+// --- Regression (concurrency-auditor round 3, HIGH 1), adapted from the
+// auditor's own scratchpad/audit011/sb_stress.cpp: the same lost-wake-up
+// hazard as OnReadyNeverLosesAWakeUpUnderRacingInstall above, but driven
+// through the real Publisher pipeline (subscribe(), egress + doorbell,
+// Publisher::run()'s poll_once()/flush_events()) rather than calling
+// Subscription::deliver()/notify_ready() directly, in case some other part
+// of that pipeline ever changes the timing enough to matter. A fresh
+// subscription per round (on_ready() is set-once), racing a varying delay
+// between "data published" and "hook installed".
+//
+// Mutation-tested against notify_ready()'s deleted fast path (reintroduced
+// locally, not committed): did not reliably reproduce a loss on this
+// machine even under added CPU contention, unlike
+// OnReadyNeverLosesAWakeUpUnderRacingInstall (tens of thousands of losses
+// per 200k rounds) and a standalone build of the auditor's own sb_stress.cpp
+// run directly against this code (0/300000 with the fix, matching the
+// auditor's own -O2 figures with the bug present) - the extra
+// subscribe()/egress/doorbell layer here evidently gives the publisher
+// thread enough of a head start that it usually finishes notify_ready()
+// before on_ready() installs, which the store-buffering hazard needs to
+// race against to matter. Kept anyway as pipeline-level coverage and
+// documentation of that investigation, but
+// OnReadyNeverLosesAWakeUpUnderRacingInstall is the test actually relied on
+// to catch a regression here. ---
+TEST(PublisherSubscriptionConcurrency, FlushNeverLosesAWakeUpThroughRealPublisherPipeline) {
+    constexpr int rounds = 50'000;
+    EgressQueue egress{1U << 16U};
+    concurrency::Doorbell bell;
+    Publisher publisher{{&egress}, bell};
+    std::jthread pub{[&](const std::stop_token& st) { publisher.run(st); }};
+
+    // Extra scheduling noise: this race is sensitive to exactly how long the
+    // publisher thread takes to wake up and run notify_ready() relative to
+    // the consumer installing on_ready() (concurrency review, round 3 - a
+    // quiet, uncontended machine can make the window too rare to hit in a
+    // bounded run). A couple of threads competing for CPU widens it without
+    // making the test itself nondeterministic in what it asserts.
+    std::atomic<bool> keep_busy{true};
+    std::vector<std::jthread> noise;
+    for (int i = 0; i < 2; ++i) {
+        noise.emplace_back([&keep_busy] {
+            while (keep_busy.load(std::memory_order_relaxed)) {
+                std::this_thread::yield();
+            }
+        });
+    }
+
+    auto push = [&](std::uint64_t sequence) {
+        const PublishedEvent event{ShardId{0}, SequenceNumber{sequence}, Timestamp{1},
+                                   accepted_event(InstrumentId{1})};
+        while (!egress.try_push(OutboundItem{event})) {
+            bell.ring();
+            std::this_thread::yield();
+        }
+        bell.ring();
+    };
+
+    std::uint64_t sequence = 0;
+    int lost = 0;
+    std::vector<PublishedEvent> buf(64);
+    for (int round = 0; round < rounds; ++round) {
+        // Both the racing event and its own confirmation marker go to this
+        // same subscription (same instrument, same filter) - deliberately
+        // not a second, separately-registered "witness" subscription:
+        // flush_events() delivers to every subscription in registration
+        // order on one thread, but the *consumer* side can observe an
+        // earlier-in-that-order subscription's new ring content before the
+        // publisher thread has gone on to deliver to a later one (SpscQueue
+        // makes each push visible to its own consumer independently) - an
+        // earlier draft of this test used a separate, always-first-
+        // registered witness subscription to confirm a flush had happened,
+        // and that cross-subscription ordering assumption made the test
+        // itself flake (confirmed as a test bug, not a library one: the
+        // auditor's own standalone sb_stress.cpp, run directly against this
+        // code, saw 0 lost over 300k rounds). Polling the *same*
+        // subscription for both sidesteps the question entirely.
+        auto sub = publisher.subscribe(
+            SubscriptionFilter{.instruments = {InstrumentId{1}}, .private_events = true}, 16);
+        auto fired = std::make_shared<std::atomic<bool>>(false);
+        const std::uint64_t k = ++sequence;
+        push(k);
+        // A short, varying *busy* spin (not yield(), which hands off to the
+        // scheduler and tends to widen past the race window rather than
+        // land inside it) - mirrors the auditor's own sb_stress.cpp, whose
+        // random 0-600 cycle delay is what makes it land inside the window
+        // a relaxed fast-path read could still see on_ready_ as null.
+        for (int spin = (round * 97) % 400; spin > 0; --spin) {
+            // NOLINTNEXTLINE(hicpp-no-assembler) - pause hint only, no
+            // inline-asm portability concern in a test.
+#if defined(__x86_64__) || defined(__i386__)
+            __builtin_ia32_pause();
+#endif
+        }
+        (void)sub->on_ready([fired]() noexcept { fired->store(true, std::memory_order_relaxed); });
+        std::size_t n = sub->poll(std::span{buf});
+        bool saw_k = n > 0;
+        const std::uint64_t marker = ++sequence;
+        push(marker);
+        for (;;) {
+            n = sub->poll(std::span{buf});
+            bool saw_marker = false;
+            for (std::size_t i = 0; i < n; ++i) {
+                if (buf[i].sequence.value() == k) {
+                    saw_k = true;
+                } else if (buf[i].sequence.value() == marker) {
+                    saw_marker = true;
+                }
+            }
+            if (saw_marker) {
+                break;
+            }
+            std::this_thread::yield();
+        }
+        if (!saw_k && !fired->load(std::memory_order_relaxed)) {
+            ++lost;
+        }
+        sub->cancel();
+    }
+
+    keep_busy.store(false, std::memory_order_relaxed);
+    noise.clear();
+    pub.request_stop();
+    bell.ring();
+    pub.join();
+    EXPECT_EQ(lost, 0) << "of " << rounds << " rounds";
 }
 
 }  // namespace
