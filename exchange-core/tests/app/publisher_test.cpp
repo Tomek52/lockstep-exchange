@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <future>
 #include <map>
 #include <memory>
@@ -69,11 +70,11 @@ bool wait_until(Pred predicate, std::chrono::milliseconds timeout = std::chrono:
 }
 
 // Runs `body` on a helper thread and reports whether it returned within
-// `limit`, instead of letting a regression hang the whole test binary
-// (concurrency review, round 3: every hang regression below needs a bounded
-// wait, not a raw blocking call). A body that never returns leaks its
-// thread (detach()) - acceptable for a handful of process-lifetime test
-// failures, never for passing runs.
+// `limit`, instead of letting a regression hang the whole test binary: a
+// hang regression needs a bounded wait, not a raw blocking call, to be
+// reported as a failure rather than wedging CI. A body that never returns
+// leaks its thread (detach()) - acceptable for a handful of
+// process-lifetime test failures, never for passing runs.
 template <typename F>
 bool completes_within(F body, std::chrono::milliseconds limit = std::chrono::seconds{5}) {
     auto done = std::make_shared<std::atomic<bool>>(false);
@@ -665,7 +666,7 @@ TEST_F(PublisherSubscriptionTest, SecondOnReadyCallIsRejected) {
     EXPECT_FALSE(sub->on_ready([]() noexcept {}));
 }
 
-// --- Regression (concurrency review, round 3): notify_ready() must not
+// --- Regression (concurrency review R6): notify_ready() must not
 // have a fast path that reads on_ready_ with anything weaker than the
 // seq_cst sequence on_ready()'s install uses, or "install the hook, then
 // immediately poll" becomes a classic store-buffering lost wake-up - two
@@ -687,9 +688,9 @@ TEST(PublisherSubscriptionConcurrency, OnReadyNeverLosesAWakeUpUnderRacingInstal
     std::atomic<std::size_t> last_poll_count{0};
 
     // on_ready() is set-once per Subscription (by design - see its doc), so
-    // a fresh one is needed every round, same as sb.cpp's own reproduction:
-    // a Subscription reused across rounds would just hit that rejection on
-    // round 2, not the race this test is about.
+    // a fresh one is needed every round: a Subscription reused across
+    // rounds would just hit that rejection on round 2, not the race this
+    // test is about.
     std::jthread deliverer{[&] {
         for (int r = 0; r < rounds; ++r) {
             while (round.load(std::memory_order_acquire) != r) {
@@ -876,8 +877,7 @@ TEST(PublisherSubscriptionPreStart, SubscribeBeforeStartThenStartDeliversInFull)
 
 // Same scenario as above, but bounded: if the pre-start direct-registration
 // path ever regresses back to blocking before a publisher thread exists,
-// this fails instead of hanging the whole test binary (concurrency-auditor
-// round 3, r3_test.cpp's pattern).
+// this fails instead of hanging the whole test binary.
 TEST(PublisherSubscriptionPreStart, SubscribeThenStartOnOneThreadCompletes) {
     EXPECT_TRUE(completes_within([] {
         ManualClock clock{1'000, 10};
@@ -890,30 +890,44 @@ TEST(PublisherSubscriptionPreStart, SubscribeThenStartOnOneThreadCompletes) {
     }));
 }
 
-// --- Regression (concurrency-auditor round 3, MEDIUM 1): Engine::stop()
-// without a preceding start() never runs the publisher thread, so
-// Publisher::stopped_ is never set by run()'s shutdown path. subscribe()
-// must still not hang in that case - it never reaches the stopped_ checks
-// at all, because started_ is also never set, so every call takes the
-// pre-start direct-registration path (see subscribe()'s doc). ---
+// --- Regression (concurrency review R7): Engine::stop() without a
+// preceding start() never runs the publisher thread, so neither stopped_
+// nor started_ is ever set by run() - subscribe() must still not hang (it
+// takes the pre-start direct-registration path instead, see its doc), and
+// Engine::stop() must still close whatever that path already registered,
+// and mark it closed for anything that subscribes afterwards (see
+// Publisher::close_before_start's doc) - a reactor waiting on a
+// subscription has no other way to learn that nothing is ever coming. ---
 TEST(PublisherSubscriptionPreStart, SubscribeAfterStopWithoutStartCompletes) {
     EXPECT_TRUE(completes_within([] {
         ManualClock clock{1'000, 10};
         test::MemoryJournals journals;
         Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}}, .shard_count = 1},
                       journals.factory(), clock};
+        // Registered before stop() - task 013's reactors subscribe once at
+        // startup and expect a stop() they raced to still close them, not
+        // leave them silently open with no publisher thread ever coming to
+        // drain or deliver to them.
+        auto registered_before_stop = engine.subscribe({}, 8);
         engine.stop();
+        // A subscribe() call after stop() must return an already-closed
+        // subscription (the same shutdown contract as the started-then-
+        // stopped case above), not one that looks live but will never
+        // receive anything - a waiting reactor needs overflowed() (or an
+        // on_ready() firing) to find out there is nothing more coming.
         auto sub = engine.subscribe({}, 8);
         EXPECT_TRUE(sub->is_registered());
+        EXPECT_TRUE(sub->overflowed());
+        EXPECT_TRUE(registered_before_stop->overflowed());
     }));
 }
 
-// --- Regression (concurrency-auditor round 3, MEDIUM 2): subscribe() called
-// from the publisher thread itself (e.g. from inside a completion) can
-// never be served - nothing else drives the registration handshake it
-// would otherwise wait on, and the wait would also wedge every shard via
-// egress back-pressure (ADR-0003). Publisher::subscribe() fails fast
-// (fatal(), which aborts) instead of deadlocking. ---
+// --- Regression (concurrency review R8): subscribe() called from the
+// publisher thread itself (e.g. from inside a completion) can never be
+// served - nothing else drives the registration handshake it would
+// otherwise wait on, and the wait would also wedge every shard via egress
+// back-pressure (ADR-0003). Publisher::subscribe() fails fast (fatal(),
+// which aborts) instead of spinning forever. ---
 // Out-of-line (not a lambda passed to EXPECT_DEATH directly): the macro's
 // argument parser only tracks parentheses, not braces or structured-binding
 // brackets, so a statement with top-level commas - e.g. `auto [a, b] = ...`
@@ -925,14 +939,22 @@ void subscribe_from_publisher_thread() {
                   journals.factory(), clock};
     engine.start();
     // No need to wait for the reply: the process aborts from inside the
-    // completion below before it could ever be set. A plain sleep bounds
-    // how long this child can run if the guard ever regresses.
+    // completion below before it could ever be set.
     (void)engine.submit(buy(InstrumentId{1}), [&engine](const CommandReply&) noexcept {
         // Runs on the publisher thread (Publisher::poll_once() invokes
         // completions inline) - exactly the case this guard exists for.
         (void)engine.subscribe({}, 8);
     });
+    // If the guard above ever regresses, the completion spins forever
+    // instead of aborting, engine.submit() still returns immediately (it
+    // does not wait for the completion), and falling off the end of this
+    // function would run ~Engine - whose stop() joins the now-permanently-
+    // stuck publisher thread, hanging the whole test binary instead of
+    // just failing this one death test. Bound the wait and exit the child
+    // directly (bypassing destructors) so a regression here is reported as
+    // "statement did not cause the child to die" instead.
     std::this_thread::sleep_for(std::chrono::seconds{5});
+    std::_Exit(0);
 }
 
 TEST(PublisherSubscriptionPreStart, SubscribeFromPublisherThreadAborts) {
@@ -944,133 +966,6 @@ TEST(PublisherSubscriptionPreStart, SubscribeFromPublisherThreadAborts) {
     // only in subscribe_from_publisher_thread(), called from inside the
     // statement, sidesteps that entirely.
     EXPECT_DEATH(subscribe_from_publisher_thread(), "");
-}
-
-// --- Regression (concurrency-auditor round 3, HIGH 1), adapted from the
-// auditor's own scratchpad/audit011/sb_stress.cpp: the same lost-wake-up
-// hazard as OnReadyNeverLosesAWakeUpUnderRacingInstall above, but driven
-// through the real Publisher pipeline (subscribe(), egress + doorbell,
-// Publisher::run()'s poll_once()/flush_events()) rather than calling
-// Subscription::deliver()/notify_ready() directly, in case some other part
-// of that pipeline ever changes the timing enough to matter. A fresh
-// subscription per round (on_ready() is set-once), racing a varying delay
-// between "data published" and "hook installed".
-//
-// Mutation-tested against notify_ready()'s deleted fast path (reintroduced
-// locally, not committed): did not reliably reproduce a loss on this
-// machine even under added CPU contention, unlike
-// OnReadyNeverLosesAWakeUpUnderRacingInstall (tens of thousands of losses
-// per 200k rounds) and a standalone build of the auditor's own sb_stress.cpp
-// run directly against this code (0/300000 with the fix, matching the
-// auditor's own -O2 figures with the bug present) - the extra
-// subscribe()/egress/doorbell layer here evidently gives the publisher
-// thread enough of a head start that it usually finishes notify_ready()
-// before on_ready() installs, which the store-buffering hazard needs to
-// race against to matter. Kept anyway as pipeline-level coverage and
-// documentation of that investigation, but
-// OnReadyNeverLosesAWakeUpUnderRacingInstall is the test actually relied on
-// to catch a regression here. ---
-TEST(PublisherSubscriptionConcurrency, FlushNeverLosesAWakeUpThroughRealPublisherPipeline) {
-    constexpr int rounds = 50'000;
-    EgressQueue egress{1U << 16U};
-    concurrency::Doorbell bell;
-    Publisher publisher{{&egress}, bell};
-    std::jthread pub{[&](const std::stop_token& st) { publisher.run(st); }};
-
-    // Extra scheduling noise: this race is sensitive to exactly how long the
-    // publisher thread takes to wake up and run notify_ready() relative to
-    // the consumer installing on_ready() (concurrency review, round 3 - a
-    // quiet, uncontended machine can make the window too rare to hit in a
-    // bounded run). A couple of threads competing for CPU widens it without
-    // making the test itself nondeterministic in what it asserts.
-    std::atomic<bool> keep_busy{true};
-    std::vector<std::jthread> noise;
-    for (int i = 0; i < 2; ++i) {
-        noise.emplace_back([&keep_busy] {
-            while (keep_busy.load(std::memory_order_relaxed)) {
-                std::this_thread::yield();
-            }
-        });
-    }
-
-    auto push = [&](std::uint64_t sequence) {
-        const PublishedEvent event{ShardId{0}, SequenceNumber{sequence}, Timestamp{1},
-                                   accepted_event(InstrumentId{1})};
-        while (!egress.try_push(OutboundItem{event})) {
-            bell.ring();
-            std::this_thread::yield();
-        }
-        bell.ring();
-    };
-
-    std::uint64_t sequence = 0;
-    int lost = 0;
-    std::vector<PublishedEvent> buf(64);
-    for (int round = 0; round < rounds; ++round) {
-        // Both the racing event and its own confirmation marker go to this
-        // same subscription (same instrument, same filter) - deliberately
-        // not a second, separately-registered "witness" subscription:
-        // flush_events() delivers to every subscription in registration
-        // order on one thread, but the *consumer* side can observe an
-        // earlier-in-that-order subscription's new ring content before the
-        // publisher thread has gone on to deliver to a later one (SpscQueue
-        // makes each push visible to its own consumer independently) - an
-        // earlier draft of this test used a separate, always-first-
-        // registered witness subscription to confirm a flush had happened,
-        // and that cross-subscription ordering assumption made the test
-        // itself flake (confirmed as a test bug, not a library one: the
-        // auditor's own standalone sb_stress.cpp, run directly against this
-        // code, saw 0 lost over 300k rounds). Polling the *same*
-        // subscription for both sidesteps the question entirely.
-        auto sub = publisher.subscribe(
-            SubscriptionFilter{.instruments = {InstrumentId{1}}, .private_events = true}, 16);
-        auto fired = std::make_shared<std::atomic<bool>>(false);
-        const std::uint64_t k = ++sequence;
-        push(k);
-        // A short, varying *busy* spin (not yield(), which hands off to the
-        // scheduler and tends to widen past the race window rather than
-        // land inside it) - mirrors the auditor's own sb_stress.cpp, whose
-        // random 0-600 cycle delay is what makes it land inside the window
-        // a relaxed fast-path read could still see on_ready_ as null.
-        for (int spin = (round * 97) % 400; spin > 0; --spin) {
-            // NOLINTNEXTLINE(hicpp-no-assembler) - pause hint only, no
-            // inline-asm portability concern in a test.
-#if defined(__x86_64__) || defined(__i386__)
-            __builtin_ia32_pause();
-#endif
-        }
-        (void)sub->on_ready([fired]() noexcept { fired->store(true, std::memory_order_relaxed); });
-        std::size_t n = sub->poll(std::span{buf});
-        bool saw_k = n > 0;
-        const std::uint64_t marker = ++sequence;
-        push(marker);
-        for (;;) {
-            n = sub->poll(std::span{buf});
-            bool saw_marker = false;
-            for (std::size_t i = 0; i < n; ++i) {
-                if (buf[i].sequence.value() == k) {
-                    saw_k = true;
-                } else if (buf[i].sequence.value() == marker) {
-                    saw_marker = true;
-                }
-            }
-            if (saw_marker) {
-                break;
-            }
-            std::this_thread::yield();
-        }
-        if (!saw_k && !fired->load(std::memory_order_relaxed)) {
-            ++lost;
-        }
-        sub->cancel();
-    }
-
-    keep_busy.store(false, std::memory_order_relaxed);
-    noise.clear();
-    pub.request_stop();
-    bell.ring();
-    pub.join();
-    EXPECT_EQ(lost, 0) << "of " << rounds << " rounds";
 }
 
 }  // namespace

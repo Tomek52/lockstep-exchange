@@ -83,17 +83,21 @@ public:
     void add_subscriber(EventSubscriber& subscriber);
 
     /// Registers a new Subscription and returns the consumer's handle to it,
-    /// blocking (a spin, never a park - typically well under one publisher
-    /// iteration) until the registration has taken effect (see the class
-    /// comment for why that handshake, not just handing the request off, is
-    /// required). Thread-safe from any thread *except* the publisher thread
-    /// itself - calling this from inside a completion or an on_ready() hook
-    /// would deadlock, since nothing else ever drives the acknowledgement.
-    /// That specific case is an invariant violation, not just a long wait:
-    /// it calls fatal() immediately instead of spinning forever
-    /// (concurrency review, round 3 - a reactor subscribing from its own
-    /// completion is a realistic mistake, and the resulting deadlock would
-    /// silently wedge every shard too, via egress back-pressure, ADR-0003).
+    /// blocking (a spin, never a park) until the registration has taken
+    /// effect (see the class comment for why that handshake, not just
+    /// handing the request off, is required). Usually within one publisher
+    /// iteration, but can take longer: `control_`'s stall property (see the
+    /// class comment) means a concurrently-preempted *other* producer can
+    /// delay how soon this registration becomes visible to `try_pop()`, not
+    /// just how soon the publisher gets around to draining it. Thread-safe
+    /// from any thread *except* the publisher thread itself - calling this
+    /// from inside a completion or an on_ready() hook can never make
+    /// progress, since nothing else would ever drive the acknowledgement.
+    /// That case is an invariant violation, not just a long wait: it calls
+    /// fatal() immediately instead of spinning forever (a reactor
+    /// subscribing from its own completion is a realistic mistake, and the
+    /// alternative - waiting forever - would silently wedge every shard
+    /// too, via egress back-pressure, ADR-0003).
     ///
     /// Before the publisher thread has ever started running(), there is no
     /// publisher thread to send this through the control queue and wait on,
@@ -126,13 +130,22 @@ public:
     /// it) by the time stopped_ becomes visible, or never will be, in which
     /// case this call closes it itself.
     ///
-    /// Calling Engine::stop() when start() was never called first is also
-    /// safe, though not via stopped_: run() never executes, so stopped_
-    /// stays false forever, but so does started_ - every later subscribe()
-    /// still takes the pre-start path above and registers directly, rather
-    /// than reaching the stopped_ checks below at all (concurrency review,
-    /// round 3).
+    /// Calling Engine::stop() when start() was never called first still
+    /// closes every subscription - not via stopped_ (run() never executes,
+    /// so it stays false forever), but via close_before_start(), which
+    /// Engine::stop() calls in that case: any subscription already
+    /// registered through the pre-start path above gets closed, and the
+    /// path itself is marked closed so every later subscribe() returns an
+    /// already-closed Subscription too, rather than one that looks
+    /// registered but will never receive anything (a reactor waiting on
+    /// on_ready() needs to find out there is nothing coming).
     std::shared_ptr<Subscription> subscribe(SubscriptionFilter filter, std::size_t capacity);
+
+    /// Called by Engine::stop() instead of the normal run()-driven shutdown
+    /// when the publisher thread was never started - see subscribe()'s doc.
+    /// Idempotent and safe to call even if run() did start concurrently (a
+    /// no-op then: that thread's own shutdown owns things from here).
+    void close_before_start();
 
     /// Thread body. Returns after `stop` is requested and all sources are
     /// drained. Precondition: the shard threads have already exited. Before
@@ -174,9 +187,14 @@ private:
     // plain bool, not an atomic, because every access to it already holds
     // this mutex. Not used once started_ is true: from then on
     // subscriptions_ is touched only by the publisher thread (ADR-0003),
-    // and subscribe() never looks at either of these two members again.
+    // and subscribe() never looks at either of these three members again.
     std::mutex pre_start_mutex_;
     bool started_{false};
+    // Set by close_before_start() (Engine::stop() without a preceding
+    // start()); makes subscribe()'s pre-start branch return an
+    // already-closed Subscription instead of registering a live one that
+    // nothing will ever drain.
+    bool pre_start_closed_{false};
     // Set at the very start of run(), before anything that could call back
     // into subscribe() (e.g. a completion) - lets subscribe() recognise and
     // fatal() on the one caller it can never serve: itself. relaxed on both

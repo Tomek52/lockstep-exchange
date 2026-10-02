@@ -132,22 +132,30 @@ bool Subscription::on_ready(std::move_only_function<void() noexcept> callback) {
     // call's object was never published, so freeing it here is always safe
     // - unlike an unconditional exchange()+delete, which could free a
     // function object the publisher thread is still inside (notify_ready()).
-    // seq_cst (not release/relaxed): the "install" side of a
-    // store-buffering hazard with notify_ready()'s hook load. A consumer
-    // thread that calls on_ready() and a publisher thread flushing at the
-    // same moment each write their own atomic (on_ready_ here,
-    // last_sequence_-derived delivery there) and read the other's
-    // (notify_ready() reads on_ready_; the consumer's next poll() reads
-    // what deliver() published into the ring, already correctly ordered by
-    // SpscQueue's own acquire/release). Release/acquire on_ready_ alone
-    // does not prevent notify_ready() from reading this store's *old*
-    // value while still having already delivered the data this call is
-    // racing to be told about - a lost wake-up, not a data race. A shared
-    // seq_cst order (both here and in notify_ready(), confirmed missing in
-    // concurrency review - see notify_ready()'s comment) is what rules
-    // that out.
+    //
+    // The CAS and the fence right after it are the consumer-side half of a
+    // fence-to-fence argument with notify_ready() (the publisher side: a
+    // seq_cst fence right before its hook load - see that function's
+    // comment). The racing publisher-side write is deliver()'s release
+    // store to the ring's tail_ (SpscQueue::try_push), not anything on this
+    // object. A plain seq_cst CAS here and a plain seq_cst load there would
+    // only order on_ready_ itself between the two threads - the C++ memory
+    // model does not extend that to a *different* object (the ring's
+    // tail_, read with only an acquire load by this consumer's next
+    // poll()) without an explicit fence on both sides naming the same
+    // seq_cst total order (this matters on weaker-than-x86 models, e.g.
+    // AArch64/RCPC). With both fences in place: if notify_ready() reads
+    // this CAS's result after its own install-order position (on_ready_
+    // visibly non-null to it), its fence
+    // guarantees it also sees deliver()'s tail_ store; if it reads before
+    // (on_ready_ still null to it, so it skips the hook), this fence
+    // guarantees the consumer's very next poll() - happening after this
+    // call returns - sees that same tail_ store instead. Either way the
+    // data is never stuck invisible to both sides at once.
     if (on_ready_.compare_exchange_strong(expected, owned, std::memory_order_seq_cst,
                                           std::memory_order_seq_cst)) {
+        // seq_cst: see above.
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         return true;
     }
     delete owned;
@@ -210,12 +218,11 @@ bool Subscription::deliver(const PublishedEvent& event) {
 
 void Subscription::notify_ready() noexcept {
     // No "on_ready_ still null, nothing to do" fast path here on purpose: a
-    // relaxed pre-check of on_ready_ reintroduces exactly the store-buffering
-    // lost wake-up on_ready()'s seq_cst CAS exists to rule out (confirmed by
-    // a concurrency review reproduction: a consumer thread's on_ready() call
-    // can be invisible to a relaxed load here for long enough that this
-    // flush - the only one racing that install - returns without ever
-    // calling the hook). Every call pays the seq_cst sequence below.
+    // relaxed pre-check of on_ready_ can read a stale null long enough that
+    // this flush - the only one racing a concurrent on_ready() install -
+    // returns without ever calling the hook, the exact store-buffering lost
+    // wake-up on_ready()'s seq_cst sequence exists to rule out. Every call
+    // pays the seq_cst sequence below.
     notifying_.store(true,
                      std::memory_order_seq_cst);  // seq_cst: see the notifying_ member's comment
     // Re-checked here (not just by the caller) so a cancel() that lands
@@ -224,12 +231,12 @@ void Subscription::notify_ready() noexcept {
     // cancel()'s spin only starts blocking once notifying_ is visibly true,
     // which happens-before this load (seq_cst on both sides).
     if (!cancelled_.load(std::memory_order_seq_cst)) {
-        // The other half of on_ready()'s store-buffering pair: a seq_cst
-        // fence immediately before the hook load, matching on_ready()'s
-        // seq_cst install - see its comment for which hazard this closes
-        // (a lost wake-up, not a data race: the ring's own contents are
-        // already correctly ordered by SpscQueue's acquire/release in
-        // deliver()/poll(), independently of on_ready_).
+        // The publisher-side half of on_ready()'s fence-to-fence argument -
+        // see its comment for the full pairing. This fence sits right
+        // before the hook load below, so it captures deliver()'s release
+        // store to the ring's tail_ (this flush's own delivery, already
+        // done by the time notify_ready() runs) on the same side as the
+        // on_ready_ load that decides whether to call the hook.
         std::atomic_thread_fence(std::memory_order_seq_cst);
         auto* callback = on_ready_.load(std::memory_order_seq_cst);
         if (callback != nullptr) {

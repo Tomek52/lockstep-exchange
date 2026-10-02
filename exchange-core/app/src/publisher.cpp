@@ -45,6 +45,14 @@ std::shared_ptr<Subscription> Publisher::subscribe(SubscriptionFilter filter,
     {
         const std::lock_guard<std::mutex> lock(pre_start_mutex_);
         if (!started_) {
+            if (pre_start_closed_) {
+                // Engine::stop() ran with no start() ever called (see
+                // close_before_start()) - nothing will ever drain this, so
+                // hand back an already-closed Subscription rather than one
+                // that looks registered but can never receive anything.
+                subscription->close();
+                return subscription;
+            }
             // No publisher thread exists yet to send this through control_
             // and wait on - register directly instead (see subscribe()'s
             // doc for why this is race-free against a concurrent start()).
@@ -263,6 +271,24 @@ void Publisher::deliver_to(Subscription& subscription) {
     }
     if (touched) {
         subscription.notify_ready();
+    }
+}
+
+void Publisher::close_before_start() {
+    const std::lock_guard<std::mutex> lock(pre_start_mutex_);
+    if (started_ || pre_start_closed_) {
+        // started_: run() did start (concurrently with, or before, this
+        // call) and owns shutdown from here - its own close-everything pass
+        // covers whatever is in subscriptions_. pre_start_closed_: an
+        // earlier call already did this (Engine::stop() is idempotent).
+        return;
+    }
+    pre_start_closed_ = true;
+    // Only ever reached via the pre-start direct-registration path
+    // (subscribe()'s doc), so every entry here was added under this same
+    // mutex and nothing else is touching subscriptions_ right now.
+    for (const std::shared_ptr<Subscription>& subscription : subscriptions_) {
+        subscription->close();
     }
 }
 
