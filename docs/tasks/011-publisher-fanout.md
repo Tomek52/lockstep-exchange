@@ -42,7 +42,6 @@ scoped to one book), so the instrument filter never excludes it; it is still
 gated by `private_events`.
 
 ```cpp
-
 /// Consumer end of a subscription. Thread-safe to use from ONE consumer thread
 /// (e.g. a gRPC reactor) while the publisher produces.
 class Subscription {
@@ -51,11 +50,17 @@ public:
     std::size_t poll(std::span<PublishedEvent> out);
     /// True once the buffer overflowed; no further events are delivered.
     [[nodiscard]] bool overflowed() const noexcept;
-    /// Called by the consumer to stop delivery (idempotent).
+    /// Called by the consumer to stop delivery (idempotent). Blocks (a
+    /// short spin, never a park) until any on_ready() call already in
+    /// progress has returned, so the consumer may safely destroy whatever
+    /// it captured right after this returns.
     void cancel() noexcept;
     /// Optional wake-up hook the publisher calls (on its thread) after
-    /// delivering; must not block. Set before first poll.
-    void on_ready(std::move_only_function<void() noexcept> callback);
+    /// delivering; must not block. Set before first poll. May be set only
+    /// once - a second call is rejected (returns false) rather than
+    /// replacing the hook, since the publisher thread might already be
+    /// executing it.
+    [[nodiscard]] bool on_ready(std::move_only_function<void() noexcept> callback);
 };
 
 // Engine / Publisher
@@ -100,8 +105,9 @@ Tests in `tests/app/publisher_test.cpp`:
 ## Out of scope
 
 - The gRPC `MarketDataService` that consumes subscriptions (task 013).
-- Snapshot-on-subscribe (a new subscriber receiving the current book): note
-  it as a follow-up.
+- Snapshot-on-subscribe (a new subscriber receiving the current book): noted
+  as a follow-up in [ROADMAP.md](../../ROADMAP.md)'s "Beyond M5" list and in
+  [013](013-grpc-market-data.md)'s own Out of scope section.
 
 ## Dependencies
 

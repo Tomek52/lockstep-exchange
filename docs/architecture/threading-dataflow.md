@@ -64,32 +64,40 @@ instrument filter, never by the three booleans). Registration cannot touch
 publisher's alone, same single-writer rule as everything else here), so
 `subscribe()` instead pushes the new `Subscription` through a small bounded
 MPSC control queue and rings the publisher's doorbell; the publisher drains
-that queue (`drain_control()`) immediately before *every single pop* from
-every egress queue, not just once per `poll_once()` call or once per flush.
+that queue (`drain_control()`) from two places in `poll_once()`: once per
+egress source before its inner pop loop (so a subscription still registers
+even on a source with nothing to pop), and again immediately after every
+successful pop, before accounting for that item.
 
-That placement is load-bearing, not cosmetic (found missing, with the
-production incident below, in task 011's own review). `ShardRuntime::release_staged()`
-pushes one command's events to egress with a separate `try_push()` per
-event, not as one atomic unit, so the publisher's `try_pop()` can see
-"nothing more right now" partway through a command and the rest only once
-the shard catches up - a subscription that registered in that gap must
-receive either *all* of that command's events or *none*, never just the
-tail. Every `PublishedEvent` carries its command's per-shard `sequence`, so
-the publisher instead tracks `last_sequence_[shard]` (the sequence of the
-last item popped so far for that shard) and stamps it onto every newly
-registered `Subscription` as `start_sequence_` the moment it is drained off
-the control queue; `Subscription::wants()` only ever delivers events whose
-sequence is strictly later. Because one command's events all share its
-sequence number, that threshold can never admit part of a command while
-excluding the rest: either the whole command postdates the stamp (none of
-it had been popped when this subscription registered) or none of it does.
-Draining right before every pop, rather than less often, is also what makes
-a command submitted strictly after `subscribe()` returns always delivered
-in full: a production incident on this task's PR (CI's release build) found
-a command's events dropped entirely because the control queue was drained
-only once per `poll_once()` call, and a single call's inner loop can pop
-several commands' worth of items - including a brand-new one - before ever
-checking it again.
+`ShardRuntime::release_staged()` pushes one command's events to egress with
+a separate `try_push()` per event, not as one atomic unit, so the
+publisher's `try_pop()` can see "nothing more right now" partway through a
+command and the rest only once the shard catches up - a subscription that
+registered in that gap must receive either *all* of that command's events
+or *none*, never just the tail. Every `PublishedEvent` carries its
+command's per-shard `sequence`, so the publisher tracks
+`last_sequence_[shard]` (the sequence of the last item popped so far for
+that shard) and stamps it onto every newly registered `Subscription` as
+`start_sequence_` the moment it is drained off the control queue;
+`Subscription::wants()` only ever delivers events whose sequence is
+strictly later. Because one command's events all share its sequence
+number, that threshold can never admit part of a command while excluding
+the rest: either the whole command postdates the stamp (none of it had
+been popped when this subscription registered) or none of it does.
+
+That second drain - immediately after the pop, before `last_sequence_` is
+updated for it, not before the pop - is what also makes a command submitted
+strictly after `subscribe()` returns always delivered in full. Draining
+only *before* each pop (or only once per `poll_once()` call, or once per
+flush) leaves a window: this thread could find the control queue empty,
+then be preempted for an arbitrary stretch before the pop that follows -
+during which `subscribe()` could return and the command could be fully
+produced - and resume with a stamp that is stale by more than the one item
+it was meant to cover. Egress is an `SpscQueue`: `try_pop()`'s acquire only
+makes an item visible once the shard's matching release has happened, which
+cannot precede the shard's own push of it, so draining again right after
+the pop guarantees that any `subscribe()` call already visible when *that*
+item became poppable is drained before `last_sequence_` ever reflects it.
 
 A subscriber that stops polling fills its ring; the publisher never blocks
 on it (ADR-0006's slow-consumer policy). The moment a push to a
