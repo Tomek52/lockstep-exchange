@@ -67,9 +67,25 @@ public:
 std::shared_ptr<Subscription> Engine::subscribe(SubscriptionFilter filter, std::size_t capacity);
 ```
 
-- **Registration is thread-safe** from any thread. Hand requests to the
-  publisher thread through a small MPSC control queue, so that the
-  publisher's subscriber list is still touched only by the publisher.
+- **Registration is thread-safe** from any thread **except the publisher
+  thread itself** (e.g. from inside a completion or an `on_ready()` hook -
+  nothing else would ever drive the handshake below, so that case calls
+  `fatal()` instead of deadlocking). Hand requests to the publisher thread
+  through a small MPSC control queue, so that the publisher's subscriber
+  list is still touched only by the publisher. `subscribe()` **blocks**
+  until the publisher has actually registered the subscription (at most
+  about one publisher iteration) before returning it - handing the request
+  off and returning immediately is not enough: the control queue's documented
+  stall property (`concurrency/mpsc_queue.hpp`) means a push being visible
+  in real time does not mean the publisher can pop it yet, so a caller could
+  otherwise submit a command whose events get accounted for before this
+  still-unregistered subscription is actually drained, silently dropping a
+  command submitted strictly after `subscribe()` returned. Before the
+  publisher thread has ever been started, there is no thread to hand the
+  request to and wait on - that case registers directly on the calling
+  thread instead (safe from a concurrent `start()`: see `Publisher::subscribe`'s
+  doc for how), so `engine.subscribe(...); engine.start();` on one thread
+  works rather than deadlocking.
 - **Delivery** goes into a per-subscription SPSC ring (publisher → consumer).
   Use `SpscQueue` if task 005 has landed, else `MutexQueue`.
 - **Overflow:** set `overflowed` (atomic, with ordering comment), stop

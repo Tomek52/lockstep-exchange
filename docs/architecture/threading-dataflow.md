@@ -62,12 +62,47 @@ private-events flags; `InstrumentStatusChanged` is gated only by the
 instrument filter, never by the three booleans). Registration cannot touch
 `subscriptions_` directly from the calling thread (that list is the
 publisher's alone, same single-writer rule as everything else here), so
-`subscribe()` instead pushes the new `Subscription` through a small bounded
-MPSC control queue and rings the publisher's doorbell; the publisher drains
-that queue (`drain_control()`) from two places in `poll_once()`: once per
-egress source before its inner pop loop (so a subscription still registers
-even on a source with nothing to pop), and again immediately after every
-successful pop, before accounting for that item.
+`subscribe()` hands the new `Subscription` to the publisher thread through a
+small bounded MPSC control queue, rings its doorbell, and then **blocks**
+(a bounded spin, never a park) until the publisher thread has actually
+drained and acknowledged it (`Subscription::is_registered()`) before
+returning it to the caller. `subscribe()` must never be called from the
+publisher thread itself (e.g. from inside a completion or an `on_ready()`
+hook) - nothing else would ever drive that acknowledgement, and it would
+deadlock. That specific case is treated as an invariant violation rather
+than a wait: `Publisher` records its own thread's id at the start of `run()`
+and `subscribe()` calls `fatal()` immediately if it is ever called from that
+same thread, instead of spinning forever.
+
+That block is required, not just a convenience: `control_` is a
+multi-producer queue with the stall property documented in
+`concurrency/mpsc_queue.hpp` - a producer preempted between claiming a slot
+and publishing it can make every later slot, including a *different*
+subscribe() call's own already-published one, unreachable to `try_pop()`
+for an unbounded time. No placement of the publisher's drain call closes
+that by itself; only acknowledging the specific registration does. Once
+acknowledged, nothing the caller does afterwards (e.g. submitting a
+command) can have happened before that point, which is what makes "a
+command submitted after `subscribe()` returns is always delivered in full"
+hold regardless of exactly when the publisher thread happens to process the
+registration.
+
+Before the publisher thread has ever called `run()`, there is nothing to
+send the request to and wait on - blocking there would deadlock a caller
+that does `engine.subscribe(...); engine.start();` on one thread (wiring up
+a subscriber before opening the engine to traffic). `subscribe()` instead
+registers directly (on the calling thread) in that case, under a mutex that
+also guards the one-time transition `run()` makes at its very start: any
+subscribe() call already holding that mutex, or that acquires it first,
+finishes registering directly before `run()` is allowed past that point;
+any call that acquires it afterwards sees the transition already made and
+takes the normal control-queue-and-acknowledgement path instead. Either
+way, `subscriptions_` still only ever has the one writer ADR-0003 requires.
+This also covers `Engine::stop()` called without a preceding `start()`: with
+no `run()` ever having executed, that one-time transition never happens
+either, so every `subscribe()` call still takes the direct-registration path
+above rather than reaching the (never-set) shutdown flag it would otherwise
+wait on.
 
 `ShardRuntime::release_staged()` pushes one command's events to egress with
 a separate `try_push()` per event, not as one atomic unit, so the
@@ -78,26 +113,13 @@ or *none*, never just the tail. Every `PublishedEvent` carries its
 command's per-shard `sequence`, so the publisher tracks
 `last_sequence_[shard]` (the sequence of the last item popped so far for
 that shard) and stamps it onto every newly registered `Subscription` as
-`start_sequence_` the moment it is drained off the control queue;
-`Subscription::wants()` only ever delivers events whose sequence is
-strictly later. Because one command's events all share its sequence
-number, that threshold can never admit part of a command while excluding
-the rest: either the whole command postdates the stamp (none of it had
-been popped when this subscription registered) or none of it does.
-
-That second drain - immediately after the pop, before `last_sequence_` is
-updated for it, not before the pop - is what also makes a command submitted
-strictly after `subscribe()` returns always delivered in full. Draining
-only *before* each pop (or only once per `poll_once()` call, or once per
-flush) leaves a window: this thread could find the control queue empty,
-then be preempted for an arbitrary stretch before the pop that follows -
-during which `subscribe()` could return and the command could be fully
-produced - and resume with a stamp that is stale by more than the one item
-it was meant to cover. Egress is an `SpscQueue`: `try_pop()`'s acquire only
-makes an item visible once the shard's matching release has happened, which
-cannot precede the shard's own push of it, so draining again right after
-the pop guarantees that any `subscribe()` call already visible when *that*
-item became poppable is drained before `last_sequence_` ever reflects it.
+`start_sequence_` at the moment of registration; `Subscription::wants()`
+only ever delivers events whose sequence is strictly later. Because one
+command's events all share its sequence number, that threshold can never
+admit part of a command while excluding the rest: either the whole command
+postdates the stamp (none of it had been popped when this subscription
+registered - delivered in full) or none of it does (some of it had already
+been popped - none of it is delivered, including the part not yet popped).
 
 A subscriber that stops polling fills its ring; the publisher never blocks
 on it (ADR-0006's slow-consumer policy). The moment a push to a
@@ -114,8 +136,8 @@ still be inside a just-cancelled hook when the consumer frees its state.
 When the publisher thread itself is about to exit, it closes every
 subscription it still knows about (same effect as overflow) so a consumer
 waiting only on `on_ready()` cannot hang past shutdown; `subscribe()` called
-after that point returns an already-closed `Subscription` instead of
-spinning forever on a control queue nobody will ever drain again.
+after that point - or still waiting on its acknowledgement when it happens -
+returns an already-closed `Subscription` instead of hanging forever.
 `EventSubscriber`/`add_subscriber()` - synchronous, registered only before
 `start()` - is unchanged and still the risk client's path.
 
