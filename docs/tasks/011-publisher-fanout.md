@@ -73,11 +73,12 @@ std::shared_ptr<Subscription> Engine::subscribe(SubscriptionFilter filter, std::
   `fatal()` instead of deadlocking). Hand requests to the publisher thread
   through a small MPSC control queue, so that the publisher's subscriber
   list is still touched only by the publisher. `subscribe()` **blocks**
-  until the publisher has actually registered the subscription (at most
-  about one publisher iteration) before returning it - handing the request
-  off and returning immediately is not enough: the control queue's documented
-  stall property (`concurrency/mpsc_queue.hpp`) means a push being visible
-  in real time does not mean the publisher can pop it yet, so a caller could
+  until the publisher has actually registered the subscription - usually
+  within one publisher iteration, but can be longer if another producer is
+  preempted mid-push (the control queue's documented stall property,
+  `concurrency/mpsc_queue.hpp`) - before returning it. Handing the request
+  off and returning immediately is not enough: a push being visible in real
+  time does not mean the publisher can pop it yet, so a caller could
   otherwise submit a command whose events get accounted for before this
   still-unregistered subscription is actually drained, silently dropping a
   command submitted strictly after `subscribe()` returned. Before the
@@ -85,7 +86,10 @@ std::shared_ptr<Subscription> Engine::subscribe(SubscriptionFilter filter, std::
   request to and wait on - that case registers directly on the calling
   thread instead (safe from a concurrent `start()`: see `Publisher::subscribe`'s
   doc for how), so `engine.subscribe(...); engine.start();` on one thread
-  works rather than deadlocking.
+  works rather than hanging. `Engine::stop()` without a preceding `start()`
+  still closes every such directly-registered subscription (and marks any
+  later `subscribe()` call closed too), the same shutdown contract as the
+  started-then-stopped case.
 - **Delivery** goes into a per-subscription SPSC ring (publisher → consumer).
   Use `SpscQueue` if task 005 has landed, else `MutexQueue`.
 - **Overflow:** set `overflowed` (atomic, with ordering comment), stop

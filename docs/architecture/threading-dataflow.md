@@ -64,14 +64,16 @@ instrument filter, never by the three booleans). Registration cannot touch
 publisher's alone, same single-writer rule as everything else here), so
 `subscribe()` hands the new `Subscription` to the publisher thread through a
 small bounded MPSC control queue, rings its doorbell, and then **blocks**
-(a bounded spin, never a park) until the publisher thread has actually
-drained and acknowledged it (`Subscription::is_registered()`) before
-returning it to the caller. `subscribe()` must never be called from the
-publisher thread itself (e.g. from inside a completion or an `on_ready()`
-hook) - nothing else would ever drive that acknowledgement, and it would
-deadlock. That specific case is treated as an invariant violation rather
-than a wait: `Publisher` records its own thread's id at the start of `run()`
-and `subscribe()` calls `fatal()` immediately if it is ever called from that
+(a spin, never a park) until the publisher thread has actually drained and
+acknowledged it (`Subscription::is_registered()`) before returning it to
+the caller. That wait is usually within one publisher iteration, but can be
+longer if another producer is preempted mid-push (see below) - it is not
+bounded. `subscribe()` must never be called from the publisher thread
+itself (e.g. from inside a completion or an `on_ready()` hook) - nothing
+else would ever drive that acknowledgement, so it can never make progress.
+That specific case is treated as an invariant violation rather than a wait:
+`Publisher` records its own thread's id at the start of `run()` and
+`subscribe()` calls `fatal()` immediately if it is ever called from that
 same thread, instead of spinning forever.
 
 That block is required, not just a convenience: `control_` is a
@@ -102,7 +104,17 @@ This also covers `Engine::stop()` called without a preceding `start()`: with
 no `run()` ever having executed, that one-time transition never happens
 either, so every `subscribe()` call still takes the direct-registration path
 above rather than reaching the (never-set) shutdown flag it would otherwise
-wait on.
+wait on - and `Engine::stop()` itself closes whatever was registered that
+way and marks the path closed, so a `subscribe()` racing or following that
+`stop()` gets back an already-closed `Subscription` rather than one that
+looks live but will never receive anything.
+
+This mutex (`pre_start_mutex_`) is the app layer's only lock, and it is
+off the hot path by construction, not by convention: every shard and the
+publisher's own steady-state loop never touch it - only `subscribe()`'s
+pre-start branch and the one-time flip at the very top of `run()` do.
+ADR-0003's "no locks" rule is about that steady-state path (the domain and
+the per-shard runtime loops), not about a one-time startup handshake.
 
 `ShardRuntime::release_staged()` pushes one command's events to egress with
 a separate `try_push()` per event, not as one atomic unit, so the
