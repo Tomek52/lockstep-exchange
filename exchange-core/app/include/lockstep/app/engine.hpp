@@ -47,6 +47,14 @@ public:
     ~Engine() override;
 
     void add_subscriber(EventSubscriber& subscriber);
+    /// Registers a new Subscription at runtime, blocking until registration
+    /// has taken effect - usually within one publisher iteration, but can
+    /// take longer (see Publisher::subscribe's doc for the full contract
+    /// and why). Callable from any thread, before or after start(), except
+    /// the publisher thread itself (e.g. from inside a completion or an
+    /// on_ready() hook): that case aborts via fatal() rather than
+    /// deadlocking.
+    std::shared_ptr<Subscription> subscribe(SubscriptionFilter filter, std::size_t capacity);
     void start();
     void stop();
 
@@ -83,6 +91,13 @@ private:
     std::vector<std::jthread> shard_threads_;
     std::jthread publisher_thread_;
     std::atomic<bool> accepting_{false};
+    // Distinguishes "stop() before any start()" from "stop() after an
+    // earlier start()+stop() cycle" - publisher_thread_.joinable() is false
+    // in both cases (join() leaves a jthread non-joinable too), so stop()
+    // needs this to decide whether to call Publisher::close_before_start().
+    // Plain bool: start()/stop() are an owner-thread lifecycle (class
+    // comment), never called concurrently with each other.
+    bool start_called_{false};
 };
 
 }  // namespace lockstep::app

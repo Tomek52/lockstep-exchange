@@ -54,7 +54,12 @@ void Engine::add_subscriber(EventSubscriber& subscriber) {
     publisher_.add_subscriber(subscriber);
 }
 
+std::shared_ptr<Subscription> Engine::subscribe(SubscriptionFilter filter, std::size_t capacity) {
+    return publisher_.subscribe(std::move(filter), capacity);
+}
+
 void Engine::start() {
+    start_called_ = true;
     for (const auto& shard : shards_) {
         shard_threads_.emplace_back(
             [runtime = shard.get()](const std::stop_token& stop) { runtime->run(stop); });
@@ -78,6 +83,11 @@ void Engine::stop() {
     if (publisher_thread_.joinable()) {
         publisher_thread_.request_stop();
         publisher_thread_.join();  // publisher has drained every egress
+    } else if (!start_called_) {
+        // start() never ran, so there is no publisher thread to drive its
+        // own shutdown - close whatever subscribe() registered through the
+        // pre-start path directly (Publisher::subscribe's doc).
+        publisher_.close_before_start();
     }
 }
 

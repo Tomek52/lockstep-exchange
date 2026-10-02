@@ -51,7 +51,107 @@ flowchart LR
 | gRPC callback threads | nothing | network | shard ingress (MPSC) |
 | risk client callbacks | nothing | Monitor stream | every shard ingress (broadcast) |
 | shard *k* | `ShardEngine` *k* (books, risk state), journal *k*, sequence counter | ingress *k* | egress *k* (SPSC) |
-| publisher | subscriber buffers | all egress queues | subscribers, completions |
+| publisher | `subscriptions_` list, `Subscription` control queue | all egress queues, subscription control queue (MPSC) | `EventSubscriber`s, `Subscription` rings, completions |
+
+### Runtime subscriptions (task 011)
+
+`Engine::subscribe(filter, capacity)` lets any thread register a
+`Subscription` while the engine is running - a bounded, per-consumer SPSC
+ring plus a `SubscriptionFilter` (instruments, and trades/book-updates/
+private-events flags; `InstrumentStatusChanged` is gated only by the
+instrument filter, never by the three booleans). Registration cannot touch
+`subscriptions_` directly from the calling thread (that list is the
+publisher's alone, same single-writer rule as everything else here), so
+`subscribe()` hands the new `Subscription` to the publisher thread through a
+small bounded MPSC control queue, rings its doorbell, and then **blocks**
+(a spin, never a park) until the publisher thread has actually drained and
+acknowledged it (`Subscription::is_registered()`) before returning it to
+the caller. That wait is usually within one publisher iteration, but can be
+longer if another producer is preempted mid-push (see below) - it is not
+bounded. `subscribe()` must never be called from the publisher thread
+itself (e.g. from inside a completion or an `on_ready()` hook) - nothing
+else would ever drive that acknowledgement, so it can never make progress.
+That specific case is treated as an invariant violation rather than a wait:
+`Publisher` records its own thread's id at the start of `run()` and
+`subscribe()` calls `fatal()` immediately if it is ever called from that
+same thread, instead of spinning forever.
+
+That block is required, not just a convenience: `control_` is a
+multi-producer queue with the stall property documented in
+`concurrency/mpsc_queue.hpp` - a producer preempted between claiming a slot
+and publishing it can make every later slot, including a *different*
+subscribe() call's own already-published one, unreachable to `try_pop()`
+for an unbounded time. No placement of the publisher's drain call closes
+that by itself; only acknowledging the specific registration does. Once
+acknowledged, nothing the caller does afterwards (e.g. submitting a
+command) can have happened before that point, which is what makes "a
+command submitted after `subscribe()` returns is always delivered in full"
+hold regardless of exactly when the publisher thread happens to process the
+registration.
+
+Before the publisher thread has ever called `run()`, there is nothing to
+send the request to and wait on - blocking there would deadlock a caller
+that does `engine.subscribe(...); engine.start();` on one thread (wiring up
+a subscriber before opening the engine to traffic). `subscribe()` instead
+registers directly (on the calling thread) in that case, under a mutex that
+also guards the one-time transition `run()` makes at its very start: any
+subscribe() call already holding that mutex, or that acquires it first,
+finishes registering directly before `run()` is allowed past that point;
+any call that acquires it afterwards sees the transition already made and
+takes the normal control-queue-and-acknowledgement path instead. Either
+way, `subscriptions_` still only ever has the one writer ADR-0003 requires.
+This also covers `Engine::stop()` called without a preceding `start()`: with
+no `run()` ever having executed, that one-time transition never happens
+either, so every `subscribe()` call still takes the direct-registration path
+above rather than reaching the (never-set) shutdown flag it would otherwise
+wait on - and `Engine::stop()` itself closes whatever was registered that
+way and marks the path closed, so a `subscribe()` racing or following that
+`stop()` gets back an already-closed `Subscription` rather than one that
+looks live but will never receive anything.
+
+This mutex (`pre_start_mutex_`) is the app layer's only lock, and it is
+off the hot path by construction, not by convention: every shard and the
+publisher's own steady-state loop never touch it - only `subscribe()`'s
+pre-start branch and the one-time flip at the very top of `run()` do.
+ADR-0003's "no locks" rule is about that steady-state path (the domain and
+the per-shard runtime loops), not about a one-time startup handshake.
+
+`ShardRuntime::release_staged()` pushes one command's events to egress with
+a separate `try_push()` per event, not as one atomic unit, so the
+publisher's `try_pop()` can see "nothing more right now" partway through a
+command and the rest only once the shard catches up - a subscription that
+registered in that gap must receive either *all* of that command's events
+or *none*, never just the tail. Every `PublishedEvent` carries its
+command's per-shard `sequence`, so the publisher tracks
+`last_sequence_[shard]` (the sequence of the last item popped so far for
+that shard) and stamps it onto every newly registered `Subscription` as
+`start_sequence_` at the moment of registration; `Subscription::wants()`
+only ever delivers events whose sequence is strictly later. Because one
+command's events all share its sequence number, that threshold can never
+admit part of a command while excluding the rest: either the whole command
+postdates the stamp (none of it had been popped when this subscription
+registered - delivered in full) or none of it does (some of it had already
+been popped - none of it is delivered, including the part not yet popped).
+
+A subscriber that stops polling fills its ring; the publisher never blocks
+on it (ADR-0006's slow-consumer policy). The moment a push to a
+subscription's ring fails, that `Subscription` is marked `overflowed()`
+(no further events are delivered to it) and its `on_ready()` hook, if any,
+fires once; the publisher drops it from `subscriptions_` on its next
+`poll_once()` iteration (`prune_subscriptions()`, once per call - cheap
+enough, and this cleanup is not latency-sensitive the way registration
+ordering is). `cancel()` additionally waits out any `on_ready()` invocation
+already in progress (a short spin, never a park) before returning, so a
+consumer may safely destroy whatever its hook captured right after
+`cancel()` returns - without that handshake, the publisher thread could
+still be inside a just-cancelled hook when the consumer frees its state.
+When the publisher thread itself is about to exit, it closes every
+subscription it still knows about (same effect as overflow) so a consumer
+waiting only on `on_ready()` cannot hang past shutdown; `subscribe()` called
+after that point - or still waiting on its acknowledgement when it happens -
+returns an already-closed `Subscription` instead of hanging forever.
+`EventSubscriber`/`add_subscriber()` - synchronous, registered only before
+`start()` - is unchanged and still the risk client's path.
 
 ## Life of an order
 
@@ -171,3 +271,7 @@ signal handler ever runs concurrently with the runtime.
 | MPSC slot sequences, `enqueue_pos_` | task 006 | acquire/release + relaxed CAS | See ADR-0011 |
 | `Doorbell::counter_` | `concurrency/idle_strategy.hpp`, task 007 | acquire/release | `ring()` must happen-before whatever a waiter observes once woken |
 | `ShardStats` counters | `app/shard_runtime.{hpp,cpp}`, task 007 | relaxed | Diagnostic only; single writer (the shard thread), read from any thread |
+| `Subscription::overflowed_` | `app/subscription.{hpp,cpp}`, task 011 | release (set) / acquire (read) | `close()` sets it with no accompanying ring push, so unlike a plain overflow this flag has to carry its own happens-before to the consumer |
+| `Subscription::cancelled_`/`notifying_` | `app/subscription.{hpp,cpp}`, task 011 | seq_cst | Dekker handshake: `cancel()` must not return while `notify_ready()` could still be mid-callback (so the consumer can safely destroy captured state right after) - two independent atomics, so acquire/release alone cannot prevent each side observing only its own write first |
+| `Subscription::on_ready_` | `app/subscription.{hpp,cpp}`, task 011 | release (set, compare_exchange) / acquire (invoke) | Publishes the callback's captured state before the publisher thread invokes it; set-once (CAS from null) so a second call never frees a callback the publisher might be running |
+| `Publisher::stopped_` | `app/publisher.{hpp,cpp}`, task 011 | release (set in `run()`) / acquire (read in `subscribe()`) | Set only after every remaining subscription has been closed, so a `subscribe()` that observes it true never needs to touch the (no-longer-drained) control queue |

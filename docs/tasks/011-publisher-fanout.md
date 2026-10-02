@@ -31,7 +31,17 @@ struct SubscriptionFilter {
     bool book_updates{true};
     bool private_events{false};  // OrderAccepted/Cancelled/Modified, RiskCommandApplied (risk client)
 };
+```
 
+`InstrumentStatusChanged` is gated by none of the three booleans above: a
+halt/resume is always delivered, subject only to the instrument filter -
+`market_data.proto` carries no status flag of its own, and an order-entry
+client needs to know about a halt regardless of what else it asked for.
+`RiskCommandApplied` carries no instrument (a per-shard broadcast ack, not
+scoped to one book), so the instrument filter never excludes it; it is still
+gated by `private_events`.
+
+```cpp
 /// Consumer end of a subscription. Thread-safe to use from ONE consumer thread
 /// (e.g. a gRPC reactor) while the publisher produces.
 class Subscription {
@@ -40,20 +50,46 @@ public:
     std::size_t poll(std::span<PublishedEvent> out);
     /// True once the buffer overflowed; no further events are delivered.
     [[nodiscard]] bool overflowed() const noexcept;
-    /// Called by the consumer to stop delivery (idempotent).
+    /// Called by the consumer to stop delivery (idempotent). Blocks (a
+    /// short spin, never a park) until any on_ready() call already in
+    /// progress has returned, so the consumer may safely destroy whatever
+    /// it captured right after this returns.
     void cancel() noexcept;
     /// Optional wake-up hook the publisher calls (on its thread) after
-    /// delivering; must not block. Set before first poll.
-    void on_ready(std::move_only_function<void() noexcept> callback);
+    /// delivering; must not block. Set before first poll. May be set only
+    /// once - a second call is rejected (returns false) rather than
+    /// replacing the hook, since the publisher thread might already be
+    /// executing it.
+    [[nodiscard]] bool on_ready(std::move_only_function<void() noexcept> callback);
 };
 
 // Engine / Publisher
 std::shared_ptr<Subscription> Engine::subscribe(SubscriptionFilter filter, std::size_t capacity);
 ```
 
-- **Registration is thread-safe** from any thread. Hand requests to the
-  publisher thread through a small MPSC control queue, so that the
-  publisher's subscriber list is still touched only by the publisher.
+- **Registration is thread-safe** from any thread **except the publisher
+  thread itself** (e.g. from inside a completion or an `on_ready()` hook -
+  nothing else would ever drive the handshake below, so that case calls
+  `fatal()` instead of deadlocking). Hand requests to the publisher thread
+  through a small MPSC control queue, so that the publisher's subscriber
+  list is still touched only by the publisher. `subscribe()` **blocks**
+  until the publisher has actually registered the subscription - usually
+  within one publisher iteration, but can be longer if another producer is
+  preempted mid-push (the control queue's documented stall property,
+  `concurrency/mpsc_queue.hpp`) - before returning it. Handing the request
+  off and returning immediately is not enough: a push being visible in real
+  time does not mean the publisher can pop it yet, so a caller could
+  otherwise submit a command whose events get accounted for before this
+  still-unregistered subscription is actually drained, silently dropping a
+  command submitted strictly after `subscribe()` returned. Before the
+  publisher thread has ever been started, there is no thread to hand the
+  request to and wait on - that case registers directly on the calling
+  thread instead (safe from a concurrent `start()`: see `Publisher::subscribe`'s
+  doc for how), so `engine.subscribe(...); engine.start();` on one thread
+  works rather than hanging. `Engine::stop()` without a preceding `start()`
+  still closes every such directly-registered subscription (and marks any
+  later `subscribe()` call closed too), the same shutdown contract as the
+  started-then-stopped case.
 - **Delivery** goes into a per-subscription SPSC ring (publisher → consumer).
   Use `SpscQueue` if task 005 has landed, else `MutexQueue`.
 - **Overflow:** set `overflowed` (atomic, with ordering comment), stop
@@ -89,8 +125,9 @@ Tests in `tests/app/publisher_test.cpp`:
 ## Out of scope
 
 - The gRPC `MarketDataService` that consumes subscriptions (task 013).
-- Snapshot-on-subscribe (a new subscriber receiving the current book): note
-  it as a follow-up.
+- Snapshot-on-subscribe (a new subscriber receiving the current book): noted
+  as a follow-up in [ROADMAP.md](../../ROADMAP.md)'s "Beyond M5" list and in
+  [013](013-grpc-market-data.md)'s own Out of scope section.
 
 ## Dependencies
 

@@ -5,7 +5,8 @@ add_library(lockstep_app STATIC
   src/fatal.cpp
   src/publisher.cpp
   src/router.cpp
-  src/shard_runtime.cpp)
+  src/shard_runtime.cpp
+  src/subscription.cpp)
 add_library(lockstep::app ALIAS lockstep_app)
 
 target_include_directories(lockstep_app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
