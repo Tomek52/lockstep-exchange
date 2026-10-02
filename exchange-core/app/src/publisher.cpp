@@ -25,10 +25,11 @@ void Publisher::add_subscriber(EventSubscriber& subscriber) {
 std::shared_ptr<Subscription> Publisher::subscribe(SubscriptionFilter filter,
                                                    std::size_t capacity) {
     auto subscription = std::make_shared<Subscription>(std::move(filter), capacity);
+    // seq_cst: paired with the seq_cst store in run() - see stopped_'s doc.
     // stopped_ is set only after run() has closed every subscription it
     // still knows about; a true result here means nothing will ever drain
     // control_ again, so pushing to it would just orphan this subscription.
-    if (stopped_.load(std::memory_order_acquire)) {
+    if (stopped_.load(std::memory_order_seq_cst)) {
         subscription->close();
         return subscription;
     }
@@ -39,7 +40,7 @@ std::shared_ptr<Subscription> Publisher::subscribe(SubscriptionFilter filter,
     // attempt: the publisher can stop while this loop is retrying a full
     // queue, and without this check it would spin forever (task 011 review).
     while (!control_.try_push(std::move(for_control))) {  // NOLINT(bugprone-use-after-move)
-        if (stopped_.load(std::memory_order_acquire)) {
+        if (stopped_.load(std::memory_order_seq_cst)) {
             subscription->close();
             return subscription;
         }
@@ -50,6 +51,37 @@ std::shared_ptr<Subscription> Publisher::subscribe(SubscriptionFilter filter,
     // a ring before the push could wake a waiter that sees nothing and parks
     // again with no further ring left to wake it.
     doorbell_.ring();
+    // Block until the publisher thread has actually drained and stamped
+    // this subscription (see is_registered()'s doc), rather than returning
+    // as soon as the push above is merely visible. This is the fix for a
+    // concurrency review finding: control_ is a Dmitry Vyukov MPSC queue
+    // (concurrency/mpsc_queue.hpp), and its documented stall property means
+    // a push being visible in real time does not mean try_pop() can see it
+    // yet - a different, concurrently-stalled producer earlier in the queue
+    // can make drain_control() report "empty" even though this push has
+    // already landed. Returning on visibility alone could let a caller
+    // submit a command before this subscription was actually registered,
+    // with nothing to stop that command's events from being accounted for
+    // (last_sequence_ advanced past them) before the still-unregistered
+    // subscription is finally drained - dropping it entirely despite having
+    // been submitted strictly after subscribe() returned. Waiting for the
+    // publisher's own acknowledgement sidesteps the question of exactly
+    // when a push becomes poppable: whatever last_sequence_ is at the
+    // moment drain_control() actually processes this subscription is
+    // correct by construction (set_start_sequence()'s doc), for any drain
+    // placement.
+    while (!subscription->is_registered()) {
+        if (stopped_.load(std::memory_order_seq_cst)) {
+            // Covers both: this push never reached drain_control() before
+            // shutdown's own pass (close() unblocks us directly), and the
+            // rarer case where it did and run() already closed it (the
+            // is_registered() check above would then already be true, so
+            // this branch is not reached) - either way, safe and idempotent.
+            subscription->close();
+            break;
+        }
+        std::this_thread::yield();
+    }
     return subscription;
 }
 
@@ -73,19 +105,23 @@ void Publisher::run(const std::stop_token& stop) {
     for (const std::shared_ptr<Subscription>& subscription : subscriptions_) {
         subscription->close();
     }
-    stopped_.store(true, std::memory_order_release);
+    stopped_.store(true, std::memory_order_seq_cst);  // seq_cst: see subscribe()'s checks
 }
 
 std::size_t Publisher::poll_once() {
     std::size_t processed = 0;
     for (EgressQueue* source : sources_) {
+        // Once per source, before its inner pop loop: the safety net that
+        // registers a subscription even on a source with nothing to pop at
+        // all, so one never waits forever behind a quiet shard (subscribe()
+        // blocks on exactly this - see its doc). Correctness of what a
+        // registered subscription then receives does not depend on this
+        // call's exact placement relative to any particular pop below (see
+        // the class comment): wherever last_sequence_ happens to stand when
+        // a subscription is actually drained is the correct cutoff for it,
+        // by construction.
+        drain_control();
         for (std::size_t n = 0; n < max_batch_; ++n) {
-            // Drained immediately before every pop - see the class comment
-            // on why this exact placement (not once per poll_once() call,
-            // not once per flush) is what makes registration race-free
-            // against both a command that starts after it and one that is
-            // already partway through being flushed when it happens.
-            drain_control();
             std::optional<OutboundItem> item = source->try_pop();
             if (!item) {
                 break;
@@ -93,6 +129,11 @@ std::size_t Publisher::poll_once() {
             ++processed;
             std::visit(
                 [this]<typename T>(T& payload) {
+                    // Indexing last_sequence_ by the event's own ShardId,
+                    // not this loop's position in sources_: relies on
+                    // Engine building sources_ in shard-id order (shard k's
+                    // egress at index k, engine.cpp's egress_queues()), so
+                    // every ShardId this publisher ever sees is in bounds.
                     if constexpr (std::is_same_v<T, PublishedEvent>) {
                         last_sequence_[payload.shard.value()] = payload.sequence;
                         pending_.push_back(payload);
@@ -125,13 +166,16 @@ void Publisher::flush_events() {
 
 void Publisher::drain_control() {
     while (std::optional<std::shared_ptr<Subscription>> added = control_.try_pop()) {
-        // Snapshot last_sequence_ as it stands right now - i.e. reflecting
-        // every item popped strictly before this registration and nothing
-        // popped after it, since drain_control() never runs *after* a pop
-        // without running again *before* the next one. See the class
-        // comment for why this is the property that makes both failure
-        // modes (a dropped post-registration command, a partially-delivered
-        // pre-registration one) impossible.
+        // Snapshot last_sequence_ as it stands right now, and mark the
+        // subscription registered (set_start_sequence()'s doc) - the signal
+        // subscribe() is waiting on before it returns this same object to
+        // its caller. That handshake, not this call's placement, is what
+        // guarantees a command submitted after subscribe() returns is
+        // delivered in full (see Publisher::subscribe's doc); this snapshot
+        // only has to be internally consistent - never including an item
+        // not yet accounted for in last_sequence_ - which holds here
+        // because nothing updates last_sequence_ except this same thread,
+        // and never concurrently with this loop.
         (*added)->set_start_sequence(last_sequence_);
         subscriptions_.push_back(std::move(*added));
     }

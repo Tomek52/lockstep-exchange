@@ -2,10 +2,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
 #include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <stop_token>
 #include <thread>
@@ -269,45 +269,89 @@ TEST_F(PublisherSubscriptionTest, CancelStopsDelivery) {
 // --- Acceptance criterion 3: concurrent subscribe/cancel under traffic ---
 
 TEST_F(PublisherSubscriptionTest, ConcurrentSubscribeAndCancelFromFourThreadsIsRaceFree) {
+    // Every event any worker below ever polled, so this test also checks
+    // some content, not just "no TSan report". The complementary "never a
+    // partial command" invariant is checked by
+    // ManySubscriptionsDuringHighThroughputTrafficNeverSeePartialCommand,
+    // under conditions that do not have this test's own confound: a
+    // subscription here is cancelled moments after its one poll(), so a
+    // shard that is itself preempted mid-release_staged() (ShardRuntime;
+    // unrelated to subscriptions, and already covered by task 007's own
+    // tests) can legitimately make what THIS short-lived subscription sees
+    // before it cancels incomplete, without that being a registration bug.
+    std::mutex collected_mutex;
+    std::vector<PublishedEvent> collected;
+
     std::atomic<bool> stop_workers{false};
     std::vector<std::jthread> workers;
     workers.reserve(4);
     for (int worker = 0; worker < 4; ++worker) {
-        workers.emplace_back([this, &stop_workers, worker] {
+        workers.emplace_back([this, &stop_workers, &collected_mutex, &collected, worker] {
             while (!stop_workers.load(std::memory_order_relaxed)) {
                 auto sub =
-                    engine.subscribe(SubscriptionFilter{.instruments = {InstrumentId{1}}}, 4);
+                    engine.subscribe(SubscriptionFilter{.instruments = {InstrumentId{1}}}, 16);
                 // Owned, heap-allocated captured state + cancel() + destroy
                 // right after: the pattern a gRPC reactor's OnDone follows
                 // (task 013), and the one cancel()'s handshake has to make
-                // safe (concurrency review R3) - this is a TSan target, not
-                // an assertion on content.
+                // safe (concurrency review R3).
                 auto* captured = new int{worker};
                 ASSERT_TRUE(sub->on_ready([captured]() noexcept { (void)*captured; }));
-                std::vector<PublishedEvent> buf(4);
-                (void)sub->poll(std::span{buf});
+                // Brief bounded retry, not one immediate poll(): registering
+                // and polling back to back otherwise has every chance of
+                // landing in the gap between two flushes rather than during
+                // one, starving this check of any data to look at even
+                // though traffic is flowing continuously elsewhere.
+                std::vector<PublishedEvent> buf(16);
+                std::size_t n = 0;
+                for (int attempt = 0; attempt < 200 && n == 0; ++attempt) {
+                    n = sub->poll(std::span{buf});
+                    if (n == 0) {
+                        std::this_thread::yield();
+                    }
+                }
+                if (n > 0) {
+                    const std::lock_guard<std::mutex> lock(collected_mutex);
+                    collected.insert(collected.end(), buf.begin(),
+                                     buf.begin() + static_cast<std::ptrdiff_t>(n));
+                }
                 sub->cancel();
                 delete captured;
             }
         });
     }
 
-    // Distinct, crossing orders so the shard actually produces a steady
-    // stream of Trade/BookLevelChanged events for the subscribers above to
-    // race against, instead of every order after the first being rejected
-    // as a duplicate client_order_id (both instruments share a trader, and
-    // the first resting order would otherwise block every later one).
-    constexpr int total = 1'000;
+    // Distinct orders that actually cross within each instrument's own
+    // book (side alternates every *other* order on the SAME instrument,
+    // not every order overall - i%2 for both instrument and side meant
+    // instrument 1 only ever saw Buy and instrument 2 only ever saw Sell,
+    // so nothing ever crossed and the subscribers above raced against
+    // nothing but idle resting orders - see the task's concurrency
+    // review), so the shard actually produces a steady stream of
+    // Trade/BookLevelChanged events for the subscribers above to race
+    // against.
+    constexpr int total = 20'000;
     for (int i = 0; i < total; ++i) {
-        NewOrder order = buy((i % 2) == 0 ? InstrumentId{1} : InstrumentId{2});
+        const InstrumentId instrument = (i % 2) == 0 ? InstrumentId{1} : InstrumentId{2};
+        NewOrder order = buy(instrument);
         order.client_order_id = ClientOrderId{static_cast<std::uint64_t>(i)};
-        order.side = (i % 2 == 0) ? Side::Buy : Side::Sell;
+        order.side = ((i / 2) % 2 == 0) ? Side::Buy : Side::Sell;
         submit_async(order);
     }
 
     stop_workers.store(true, std::memory_order_relaxed);
     workers.clear();  // joins every worker
     engine.stop();
+
+    ASSERT_GT(collected.size(), 0U) << "no worker ever received any event - the orders above "
+                                       "still are not actually crossing";
+    for (const PublishedEvent& event : collected) {
+        ASSERT_TRUE(std::holds_alternative<Trade>(event.event) ||
+                    std::holds_alternative<BookLevelChanged>(event.event));
+        const InstrumentId instrument = std::holds_alternative<Trade>(event.event)
+                                            ? std::get<Trade>(event.event).instrument
+                                            : std::get<BookLevelChanged>(event.event).instrument;
+        EXPECT_EQ(instrument, InstrumentId{1});
+    }
 }
 
 // --- Regression: many subscriptions registered during a flood of traffic
@@ -380,11 +424,15 @@ TEST(PublisherPartialCommandRegression,
     EgressQueue egress{64};
     concurrency::Doorbell bell;
     Publisher publisher{{&egress}, bell};
+    // The publisher thread must already be running: subscribe() blocks
+    // until the publisher itself drains and acknowledges the registration
+    // (Publisher::subscribe's doc), so calling it before anything can ever
+    // drain control_ would deadlock this (the calling) thread.
+    std::jthread publisher_thread{[&](const std::stop_token& stop) { publisher.run(stop); }};
     // A witness subscribed before anything happens, to pace this test off
     // (poll for what it has already seen) without an arbitrary sleep.
     auto witness =
         publisher.subscribe(SubscriptionFilter{.instruments = {}, .private_events = true}, 64);
-    std::jthread publisher_thread{[&](const std::stop_token& stop) { publisher.run(stop); }};
 
     auto event = [](std::uint64_t sequence, Event payload) {
         return PublishedEvent{ShardId{0}, SequenceNumber{sequence}, Timestamp{1}, payload};
@@ -424,88 +472,86 @@ TEST(PublisherPartialCommandRegression,
     }
 }
 
-// --- Regression: a command submitted strictly after subscribe() returns
-// must always be delivered in full (the CI failure this task's PR hit:
-// draining the control queue only once per poll_once() call left a window
-// where a long inner loop could pop a brand-new command's events before
-// ever re-checking it). Publisher-level, hand-fed, so the registration and
-// the second command's egress pushes can be sequenced deterministically
-// within what would be a single poll_once() iteration. ---
-
-// This is the shape of the CI failure itself: draining the control queue
-// only once per poll_once() call (instead of once per pop - see the
-// Publisher class comment) leaves a window where a single call's inner loop
-// pops many commands - including a brand-new one - without ever re-checking
-// it. Reproducing that deterministically needs the inner loop to actually
-// be mid-flight (not idle, not already returned) at the moment subscribe()
-// runs, so this pre-loads a large run of filler commands - all already
-// sitting in egress, nothing to force poll_once() to return early - and
-// races a concurrent subscribe() against the single long poll_once() call
-// draining them. With the once-per-call placement this is flaky in the
-// wrong direction (sometimes wins the race, sometimes loses it); with the
-// once-per-pop placement it cannot lose. 200 iterations under debug, release
-// and tsan (see the task's definition-of-done run) is the evidence for that.
-TEST(PublisherPartialCommandRegression, CommandSubmittedAfterSubscribeReturnsIsDeliveredInFull) {
-    constexpr std::uint64_t filler_commands = 4'000;
+// --- Regression: a command pushed strictly after subscribe() returns must
+// always be delivered in full (Publisher class comment's corollary).
+// Deterministic in the sense that program order guarantees "after
+// subscribe() returns" - the push only happens once subscribe() has already
+// returned - but the *miss* this reproduces needs concurrent noise: a
+// witness subscribed before the first production-code fix shows this is
+// not a timing coincidence of one specific interleaving, it is
+// control_'s (a multi-producer queue) stall property making an
+// already-returned subscription's own, already-landed push temporarily
+// unreachable to drain_control() while a concurrently-stalled *other*
+// producer sits earlier in the queue - which only concurrent subscribe()
+// traffic can actually create. Without the noise threads below this
+// passed even on the version that only fixed the preemption window, not
+// the queue-stall one; the noise is what makes it fail against that
+// version and pass against this one. ---
+TEST(PublisherPartialCommandRegression, CommandPushedAfterSubscribeReturnsIsDeliveredInFull) {
+    constexpr std::uint64_t iterations = 3'000;
+    constexpr int noise_threads = 3;
     EgressQueue egress{1U << 16U};
     concurrency::Doorbell bell;
-    Publisher publisher{{&egress}, bell, /*max_batch=*/1U << 20U};
+    Publisher publisher{{&egress}, bell};
+    std::jthread publisher_thread{[&](const std::stop_token& stop) { publisher.run(stop); }};
 
-    auto event = [](std::uint64_t sequence, Event payload) {
-        return PublishedEvent{ShardId{0}, SequenceNumber{sequence}, Timestamp{1}, payload};
+    // Concurrent subscribe()/cancel() traffic on an unrelated instrument,
+    // purely to create the control_ stall window above - it must never
+    // itself receive anything, so it cannot be mistaken for the signal
+    // under test.
+    std::atomic<bool> stop_noise{false};
+    std::vector<std::jthread> noise;
+    noise.reserve(noise_threads);
+    for (int t = 0; t < noise_threads; ++t) {
+        noise.emplace_back([&] {
+            while (!stop_noise.load(std::memory_order_relaxed)) {
+                auto sub =
+                    publisher.subscribe(SubscriptionFilter{.instruments = {InstrumentId{9}}}, 2);
+                sub->cancel();
+            }
+        });
+    }
+
+    auto event = [](std::uint64_t sequence) {
+        return PublishedEvent{ShardId{0}, SequenceNumber{sequence}, Timestamp{1},
+                              accepted_event(InstrumentId{1})};
     };
 
-    // All filler commands' events already sitting in egress before the
-    // publisher thread even starts, so its very first poll_once() call's
-    // inner loop has a long, uninterrupted run of items to pop - no gap
-    // where it would return and re-drain the control queue on its own.
-    // Instrument 2, filtered out below, regardless of exactly when the
-    // subscription ends up registering relative to this run - only the
-    // target command (instrument 1) should ever reach it.
-    for (std::uint64_t seq = 1; seq <= filler_commands; ++seq) {
-        ASSERT_TRUE(
-            egress.try_push(OutboundItem{event(seq, level_changed_event(InstrumentId{2}))}));
-    }
-    // The command this test is actually about, appended right after the
-    // filler - same single contiguous run, nothing to force an intervening
-    // flush in between it and the filler.
-    const std::uint64_t target_sequence = filler_commands + 1;
-    ASSERT_TRUE(
-        egress.try_push(OutboundItem{event(target_sequence, accepted_event(InstrumentId{1}))}));
-    ASSERT_TRUE(egress.try_push(
-        OutboundItem{event(target_sequence, level_changed_event(InstrumentId{1}))}));
+    int missed = 0;
+    std::vector<PublishedEvent> buf(8);
+    for (std::uint64_t k = 1; k <= iterations; ++k) {
+        auto sub =
+            publisher.subscribe(SubscriptionFilter{.instruments = {}, .private_events = true}, 8);
+        // subscribe() has returned: everything below is "after registration".
+        while (!egress.try_push(OutboundItem{event(k)})) {
+            bell.ring();
+            std::this_thread::yield();
+        }
+        bell.ring();
 
-    std::shared_ptr<Subscription> sub;
-    std::jthread subscriber{[&] {
-        // No synchronization with ring()/run() below on purpose: the race
-        // this test needs is "subscribe() lands while poll_once()'s inner
-        // loop is already mid-flight", and thread start-up latency alone
-        // reliably puts it somewhere in that multi-thousand-item run.
-        sub = publisher.subscribe(
-            SubscriptionFilter{.instruments = {InstrumentId{1}}, .private_events = true}, 64);
-    }};
-    std::jthread publisher_thread{[&](const std::stop_token& stop) { publisher.run(stop); }};
-    bell.ring();
-    subscriber.join();
-
-    std::vector<PublishedEvent> buf(16);
-    std::vector<PublishedEvent> got;
-    ASSERT_TRUE(wait_until(
-        [&] {
+        bool got = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{200};
+        while (!got && std::chrono::steady_clock::now() < deadline) {
             const std::size_t n = sub->poll(std::span{buf});
-            got.insert(got.end(), buf.begin(), buf.begin() + static_cast<std::ptrdiff_t>(n));
-            return got.size() >= 2;
-        },
-        std::chrono::seconds{10}));
+            for (std::size_t i = 0; i < n; ++i) {
+                got |= buf[i].sequence == SequenceNumber{k};
+            }
+            if (!got) {
+                std::this_thread::yield();
+            }
+        }
+        if (!got) {
+            ++missed;
+        }
+        sub->cancel();
+    }
 
+    stop_noise.store(true, std::memory_order_relaxed);
+    noise.clear();
     publisher_thread.request_stop();
     publisher_thread.join();
 
-    ASSERT_EQ(got.size(), 2U);
-    EXPECT_TRUE(std::holds_alternative<OrderAccepted>(got[0].event));
-    EXPECT_EQ(got[0].sequence, SequenceNumber{target_sequence});
-    EXPECT_TRUE(std::holds_alternative<BookLevelChanged>(got[1].event));
-    EXPECT_EQ(got[1].sequence, SequenceNumber{target_sequence});
+    EXPECT_EQ(missed, 0) << "of " << iterations << " iterations";
 }
 
 // --- Regression (concurrency review R1/R1b): on_ready() set after events

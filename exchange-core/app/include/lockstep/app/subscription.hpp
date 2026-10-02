@@ -40,22 +40,24 @@ struct SubscriptionFilter {
 /// the public members concurrently with that, which is the same threading
 /// shape SpscQueue itself requires.
 ///
-/// Registration takes effect part-way through Engine::subscribe (see its
-/// doc): the publisher stamps a per-shard starting point at the moment it
-/// drains the registration off its control queue, and only events with a
-/// strictly later per-shard sequence are ever delivered - so a subscription
-/// never sees any part of a command that was already (even partly) flushed
-/// to other subscribers before it registered, and always sees every event
-/// of a command that starts afterwards (`started()`'s doc has the detail).
+/// Registration takes effect only once the publisher thread drains this
+/// subscription off its control queue (Publisher::drain_control()) -
+/// Engine::subscribe/Publisher::subscribe return as soon as the request is
+/// queued, not once it is applied. At that later moment, the publisher
+/// stamps a per-shard starting point, and only events with a strictly later
+/// per-shard sequence are ever delivered (`wants()`'s doc) - so a
+/// subscription never sees any part of a command that was already (even
+/// partly) flushed to other subscribers before it registered, and always
+/// sees every event of a command that starts afterwards.
 ///
 /// A subscription that overflows or is cancelled is never destroyed from
 /// inside Publisher: both the consumer and the publisher hold a shared_ptr
-/// (Engine::subscribe hands out shared ownership), so the object outlives
-/// whichever side drops its reference first and is only destroyed once both
-/// have. Publisher::apply_control()/prune_subscriptions() can run the last
-/// erase on `subscriptions_`, so whatever a consumer captured in on_ready()
-/// may be destroyed on the *publisher* thread; its destructor must not block
-/// or touch anything only the consumer thread may touch.
+/// (Publisher::subscribe hands out shared ownership), so the object
+/// outlives whichever side drops its reference first and is only destroyed
+/// once both have. Publisher::prune_subscriptions() can run the last erase
+/// on `subscriptions_`, so whatever a consumer captured in on_ready() may be
+/// destroyed on the *publisher* thread; its destructor must not block or
+/// touch anything only the consumer thread may touch.
 class Subscription {
 public:
     /// `capacity` is rounded up to a power of two, minimum 2 (SpscQueue's
@@ -83,16 +85,24 @@ public:
     void cancel() noexcept;
     /// Optional wake-up hook the publisher calls (on its thread) once per
     /// flush that delivers to this subscription or that overflows it; must
-    /// not block, and its captured state must be safe to run even after the
-    /// consumer has moved on (ownership should be shared, e.g. a shared_ptr,
-    /// not a raw pointer into something that might already be gone). May be
-    /// set only once - set before the first poll() if the consumer relies on
-    /// it rather than polling proactively, since nothing already delivered
-    /// before the hook is installed re-fires it. A second call is rejected
-    /// (returns false) rather than replacing the hook: the publisher thread
-    /// may already be executing the first one, and freeing a function object
-    /// out from under that call would be a use-after-free.
+    /// not block. Its captured state only has to stay valid until cancel()
+    /// returns (cancel()'s doc guarantees the hook never runs again after
+    /// that - it does not need to be kept alive indefinitely or shared
+    /// beyond that point). May be set only once - set before the first
+    /// poll() if the consumer relies on it rather than polling proactively,
+    /// since nothing already delivered before the hook is installed re-fires
+    /// it. A second call is rejected (returns false) rather than replacing
+    /// the hook: the publisher thread may already be executing the first
+    /// one, and freeing a function object out from under that call would be
+    /// a use-after-free.
     [[nodiscard]] bool on_ready(std::move_only_function<void() noexcept> callback);
+
+    /// True once Publisher::drain_control() has processed this subscription
+    /// (or close() has run before that ever happened) - what
+    /// Publisher::subscribe blocks on before returning it to its caller, so
+    /// that caller never observes a "registered" subscription whose
+    /// start_sequence_ could be stale (see set_start_sequence()'s doc).
+    [[nodiscard]] bool is_registered() const noexcept;
 
     // --- Publisher-only below: called only by Publisher, on the publisher
     // thread, and never concurrently with another call to one of these. ---
@@ -103,9 +113,10 @@ public:
     /// Records this subscription's per-shard starting point: `cutoffs[s]` is
     /// the sequence number of the last item Publisher had already popped for
     /// shard `s` at the moment this subscription was drained off the control
-    /// queue (Publisher::apply_control()). Called exactly once, before this
-    /// subscription is added to Publisher's subscriptions_ list (so before
-    /// wants() is ever called on it).
+    /// queue (Publisher::drain_control()), and marks it registered (see
+    /// is_registered()). Called exactly once, before this subscription is
+    /// added to Publisher's subscriptions_ list (so before wants() is ever
+    /// called on it).
     void set_start_sequence(std::vector<domain::SequenceNumber> cutoffs);
     /// Whether `event` passes this subscription's filter and started after
     /// registration (see set_start_sequence()'s doc and the class comment).
@@ -122,12 +133,13 @@ public:
     /// (ADR-0006).
     void notify_ready() noexcept;
     /// Marks this subscription as done (same observable effect as overflow:
-    /// no further events, `overflowed()` becomes true) and fires on_ready()
-    /// once. Called by Publisher::run() for every subscription still live
-    /// when the publisher thread is about to exit, and by Engine::subscribe
-    /// for a subscription created after the publisher has already stopped,
-    /// so a consumer blocked only on this subscription's events never hangs
-    /// past shutdown.
+    /// no further events, `overflowed()` becomes true) and registered (see
+    /// is_registered()) and fires on_ready() once. Called by Publisher::run()
+    /// for every subscription still live when the publisher thread is about
+    /// to exit, and by Publisher::subscribe for a subscription that is still
+    /// waiting to be registered when the publisher has already stopped, so
+    /// a consumer blocked in subscribe() or only on this subscription's
+    /// events never hangs past shutdown.
     void close() noexcept;
 
 private:
@@ -137,6 +149,12 @@ private:
     // (publisher-thread-only: written once there, read only from wants(),
     // both on the publisher thread, so no atomics needed for this field).
     std::vector<domain::SequenceNumber> start_sequence_;
+    // Written once by set_start_sequence()/close() (publisher thread),
+    // spin-polled by subscribe() (the subscribing thread) - see
+    // is_registered()'s doc. release/acquire: publishes start_sequence_
+    // (written just before, by the same thread) to whoever observes this
+    // flip to true.
+    std::atomic<bool> registered_{false};
 
     // consumer-written: cancel() sets cancelled_ (and spins on notifying_);
     // on_ready() publishes a new hook. Kept off the publisher-written line
