@@ -54,7 +54,12 @@ Make risk-sentinel's `Monitor` stream do its job:
 - **Heartbeats:** send one downstream every 1 s. Close the session if no
   upstream message arrives within 5 s.
 - **CLI flags** in `main.rs` for the three limits (defaults from
-  `RiskLimits::default()`).
+  `RiskLimits::default()`). Reject a negative limit at startup with a clear
+  error: `RiskLimits` fields are plain `i128`, and a negative loss limit would
+  block a flat trader.
+- **Re-arming:** `RiskEngine::reset_trader` and `reset_kill_switch` (task 015)
+  re-arm the engine after an operator unblocks a trader or disengages the
+  switch. Delivering that operator action to the sentinel is out of scope.
 
 ## Acceptance criteria
 
@@ -81,6 +86,8 @@ Make risk-sentinel's `Monitor` stream do its job:
 
 - Multiple exchanges sharing positions (single exchange instance assumed).
 - Persistence and HA.
+- Delivering operator unblocks and kill-switch disengagement to the sentinel
+  (the engine already exposes `reset_trader` and `reset_kill_switch`).
 
 ## Dependencies
 

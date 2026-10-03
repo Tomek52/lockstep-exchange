@@ -22,8 +22,9 @@ No I/O and no async.
   accumulated cash can overflow after about two fills of extreme size. **This
   task decides the policy.** The recommendation is checked accumulation
   (`checked_add`), with an overflow treated as a breach that engages the kill
-  switch. Record the decision as **ADR-0016** and link it from ADR-0005's
-  consequences.
+  switch. Record the decision as an ADR (**ADR-0018**; 0016 is the
+  agent-context-budget ADR and 0017 the journal `config_hash` ADR) and link it
+  from ADR-0005's consequences.
 - [ADR-0013](../adr/0013-risk-feedback-loop.md): actions must be idempotent.
   Emit each action once per breach, not on every later fill.
 - Lints: clippy pedantic with `-D warnings` (workspace `Cargo.toml`). The
@@ -71,7 +72,7 @@ Rules:
    - `on_fill` never panics for any `Fill` within the `i64`/`u64` domain.
 3. **Overflow:** two fills at `i64::MAX × u64::MAX` produce
    `KillSwitch{engaged: true}`, with no panic.
-4. `docs/adr/0016-*.md` exists, is indexed, and is linked from ADR-0005.
+4. `docs/adr/0018-*.md` exists, is indexed, and is linked from ADR-0005.
 5. `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and
    `cargo test` pass.
 
@@ -79,7 +80,7 @@ Rules:
 
 - `rust/crates/risk-sentinel/src/{positions.rs,limits.rs,engine.rs}`
 - `rust/crates/risk-sentinel/tests/engine_properties.rs` (new, optional)
-- `docs/adr/0016-sentinel-overflow-policy.md` (new), `docs/adr/README.md`, `docs/adr/0005-*.md` (one link)
+- `docs/adr/0018-sentinel-overflow-policy.md` (new), `docs/adr/README.md`, `docs/adr/0005-*.md` (one link)
 
 ## Out of scope
 

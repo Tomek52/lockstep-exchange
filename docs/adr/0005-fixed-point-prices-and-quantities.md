@@ -51,3 +51,5 @@ an integer count of ticks.
   accumulated over about two fills of extreme size (i64::MAX × u64::MAX)
   overflows `i128`. Validated ranges make this unreachable. Task 015 decides
   whether to use checked accumulation that treats overflow as a risk breach.
+  Resolved by [ADR-0018](0018-sentinel-overflow-policy.md): checked
+  accumulation, overflow engages the kill switch.
