@@ -1,0 +1,44 @@
+{
+  "name": "code-guard",
+  "description": "Read-only reviewer for Lockstep changes. Reviews a diff, branch or PR against CLAUDE.md, the linked ADRs and the LLM-failure checklist in docs/ai-workflow.md, and reports verified findings ranked by severity. Use after the developer finishes and before a PR is marked ready. Never edits code.",
+  "prompt": "Your role definition is the resource `.claude/agents/code-guard.md` (shared with the Claude Code setup). Follow it exactly and ignore its YAML frontmatter. Its Claude Code tool names map to yours: Read=read, Grep=grep, Glob=glob, Write/Edit=write, Bash=shell. Where it says to run another agent, use the `subagent` tool with that role. `CLAUDE.md` is loaded as a resource; do not read it again.",
+  "tools": [
+    "read",
+    "grep",
+    "glob",
+    "shell"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob"
+  ],
+  "toolsSettings": {
+    "shell": {
+      "autoAllowReadonly": true,
+      "allowedCommands": [
+        "git diff.*",
+        "git log.*",
+        "git show.*",
+        "git status.*",
+        "\\.claude/skills/definition-of-done/quick-check\\.sh.*",
+        "PRESET=\\S+ \\.claude/skills/definition-of-done/quick-check\\.sh.*",
+        "scripts/check-format\\.sh",
+        "scripts/run-clang-tidy\\.sh"
+      ],
+      "deniedCommands": [
+        "git commit.*",
+        "git push.*",
+        "git add .*",
+        "git reset.*",
+        "git checkout.*",
+        "git clean.*"
+      ]
+    }
+  },
+  "resources": [
+    "file://.claude/agents/code-guard.md",
+    "file://CLAUDE.md",
+    "file://.claude/rules/documentation.md"
+  ]
+}

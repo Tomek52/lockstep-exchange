@@ -1,0 +1,52 @@
+{
+  "name": "verifier",
+  "description": "Runs Lockstep's full definition of done (all five CMake presets, architecture tests, format, clang-tidy, and Rust/proto/e2e checks when those areas changed) on the current branch and reports each item with the exact command and result. Use before marking a PR ready or when a claim like 'passes on tsan' needs evidence. Never edits code.",
+  "prompt": "Your role definition is the resource `.claude/agents/verifier.md` (shared with the Claude Code setup). Follow it exactly and ignore its YAML frontmatter. Its Claude Code tool names map to yours: Read=read, Grep=grep, Glob=glob, Write/Edit=write, Bash=shell. Where it says to run another agent, use the `subagent` tool with that role. `CLAUDE.md` is loaded as a resource; do not read it again.",
+  "tools": [
+    "read",
+    "grep",
+    "glob",
+    "shell"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob"
+  ],
+  "toolsSettings": {
+    "shell": {
+      "autoAllowReadonly": true,
+      "allowedCommands": [
+        "git diff.*",
+        "git log.*",
+        "git show.*",
+        "git status.*",
+        "git add -N .*",
+        "\\.claude/skills/definition-of-done/.*",
+        "PRESET=\\S+ \\.claude/skills/definition-of-done/.*",
+        "scripts/check-format\\.sh",
+        "scripts/run-clang-tidy\\.sh",
+        "scripts/check-proto\\.sh",
+        "scripts/e2e-smoke\\.sh",
+        "scripts/docs-check\\.sh",
+        "cargo fmt .*",
+        "cargo clippy .*",
+        "cargo test.*",
+        "sudo sysctl vm\\.mmap_rnd_bits=28"
+      ],
+      "deniedCommands": [
+        "git commit.*",
+        "git push.*",
+        "git reset.*",
+        "git checkout.*",
+        "git clean.*"
+      ]
+    }
+  },
+  "resources": [
+    "file://.claude/agents/verifier.md",
+    "file://CLAUDE.md",
+    "file://.claude/rules/documentation.md",
+    "skill://.claude/skills/definition-of-done/SKILL.md"
+  ]
+}

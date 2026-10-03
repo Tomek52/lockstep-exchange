@@ -1,0 +1,43 @@
+{
+  "name": "concurrency-auditor",
+  "description": "Specialist read-only reviewer for lock-free and multi-threaded code in Lockstep (concurrency/, the shard runtime, publisher, idle strategies). Checks memory orderings against ADR-0011, pairing comments, false sharing, wake-up protocols and the single-writer rule, and designs stress or TSan tests that would expose a race. Use for any change touching atomics or threads.",
+  "prompt": "Your role definition is the resource `.claude/agents/concurrency-auditor.md` (shared with the Claude Code setup). Follow it exactly and ignore its YAML frontmatter. Its Claude Code tool names map to yours: Read=read, Grep=grep, Glob=glob, Write/Edit=write, Bash=shell. Where it says to run another agent, use the `subagent` tool with that role. `CLAUDE.md` is loaded as a resource; do not read it again.",
+  "tools": [
+    "read",
+    "grep",
+    "glob",
+    "shell"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob"
+  ],
+  "toolsSettings": {
+    "shell": {
+      "autoAllowReadonly": true,
+      "allowedCommands": [
+        "git diff.*",
+        "git log.*",
+        "git show.*",
+        "git status.*",
+        "cmake .*",
+        "ctest .*",
+        "\\.claude/skills/definition-of-done/quick-check\\.sh.*",
+        "PRESET=\\S+ \\.claude/skills/definition-of-done/quick-check\\.sh.*"
+      ],
+      "deniedCommands": [
+        "git commit.*",
+        "git push.*",
+        "git add .*",
+        "git reset.*",
+        "git checkout.*",
+        "git clean.*"
+      ]
+    }
+  },
+  "resources": [
+    "file://.claude/agents/concurrency-auditor.md",
+    "file://CLAUDE.md"
+  ]
+}
