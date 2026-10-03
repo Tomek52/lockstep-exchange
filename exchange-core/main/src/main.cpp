@@ -12,8 +12,10 @@
 #include <ranges>
 #include <span>
 #include <stacktrace>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "lockstep/app/engine.hpp"
@@ -91,7 +93,20 @@ int run(const main_app::Options& options) {
     // config so replay can refuse a journal recorded under another one
     // (ADR-0012, ADR-0017). The Engine builds its own Router from the same
     // inputs; Router::round_robin is a pure function of them, so both agree.
-    std::filesystem::create_directories(options.journal_dir);
+    const bool journal_dir_created = std::filesystem::create_directories(options.journal_dir);
+    // A freshly created directory's entry in its parent is not durable until
+    // that parent is fsynced (fdatasync on a file inside it only covers the
+    // file's contents). Only EveryCommit promises crash durability, so only
+    // that policy needs to pay for it.
+    if (journal_dir_created && options.fsync_every_commit) {
+        const auto parent = options.journal_dir.parent_path();
+        const std::filesystem::path dir_to_sync =
+            parent.empty() ? std::filesystem::current_path() : parent;
+        if (const int error = journal::sync_directory(dir_to_sync); error != 0) {
+            throw std::runtime_error("journal: cannot fsync directory '" + dir_to_sync.string() +
+                                     "': " + std::generic_category().message(error));
+        }
+    }
     const auto router = app::Router::round_robin(config.instruments, config.shard_count);
     const auto sync =
         options.fsync_every_commit ? journal::SyncPolicy::EveryCommit : journal::SyncPolicy::None;

@@ -19,6 +19,13 @@ enum class SyncPolicy : std::uint8_t {
     EveryCommit,  ///< fdatasync(2) after every commit: survives both
 };
 
+/// Fsyncs `dir` itself (not its contents): makes durable the fact that a file
+/// or subdirectory was just created inside it, which fdatasync on that file
+/// does not cover. Returns 0 on success or an errno value. The composition
+/// root uses this after creating a fresh journal directory (`main.cpp`);
+/// `create()` below uses it after creating the journal file.
+[[nodiscard]] int sync_directory(const std::filesystem::path& dir) noexcept;
+
 /// File-backed write-ahead journal of one shard (ADR-0004, ADR-0012).
 ///
 /// append() only encodes into an in-memory buffer; commit() writes the whole

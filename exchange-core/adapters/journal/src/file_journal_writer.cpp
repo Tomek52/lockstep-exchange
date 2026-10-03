@@ -47,8 +47,13 @@ int sync_data(int fd) noexcept {
     return 0;
 }
 
-/// Makes the new directory entry durable: fdatasync on the file covers its
-/// contents, not the fact that it exists in `dir`.
+[[noreturn]] void throw_io(const std::string& what, const std::filesystem::path& path, int error) {
+    throw std::runtime_error("journal: " + what + " '" + path.string() +
+                             "': " + std::generic_category().message(error));
+}
+
+}  // namespace
+
 int sync_directory(const std::filesystem::path& dir) noexcept {
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open(2) is variadic by POSIX
     const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -65,13 +70,6 @@ int sync_directory(const std::filesystem::path& dir) noexcept {
     (void)::close(fd);
     return error;
 }
-
-[[noreturn]] void throw_io(const std::string& what, const std::filesystem::path& path, int error) {
-    throw std::runtime_error("journal: " + what + " '" + path.string() +
-                             "': " + std::generic_category().message(error));
-}
-
-}  // namespace
 
 std::filesystem::path FileJournalWriter::file_name(domain::ShardId shard) {
     return "shard-" + std::to_string(shard.value()) + ".jnl";
