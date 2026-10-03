@@ -100,6 +100,7 @@ nav:
       - adr/0014-testing-strategy.md
       - adr/0015-documentation-site-and-versioned-anchors.md
       - adr/0016-agent-context-budget.md
+      - adr/0017-journal-config-hash-covers-shard-config.md
   - Tasks:
       - tasks/README.md
       - tasks/001-order-book-storage.md

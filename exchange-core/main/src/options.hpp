@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <vector>
@@ -16,6 +17,8 @@ struct Options {
     std::size_t shards{2};
     std::vector<std::uint32_t> instruments{1, 2, 3, 4};
     bool risk_enabled{true};
+    std::filesystem::path journal_dir{"journal"};
+    bool fsync_every_commit{true};
     bool help{false};
 };
 
@@ -26,6 +29,8 @@ inline constexpr const char* usage = R"(usage: exchange-core [options]
   --exchange-id=ID            identity sent in the risk handshake  (default exchange-core-1)
   --shards=N                  number of shard threads              (default 2)
   --instruments=ID,ID,...     instrument ids to list               (default 1,2,3,4)
+  --journal-dir=DIR           directory for shard-<id>.jnl files   (default ./journal)
+  --fsync=none|commit         fdatasync journal on every commit    (default commit)
   --help)";
 
 /// Parses `--key=value` style arguments. Startup-time code: errors are

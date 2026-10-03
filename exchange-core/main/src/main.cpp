@@ -6,21 +6,28 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <print>
 #include <ranges>
 #include <span>
 #include <stacktrace>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "lockstep/app/engine.hpp"
 #include "lockstep/app/fatal.hpp"
 #include "lockstep/app/ports/clock.hpp"
+#include "lockstep/app/router.hpp"
+#include "lockstep/domain/shard_engine.hpp"
 #include "lockstep/grpc/order_entry_service.hpp"
 #include "lockstep/grpc/server.hpp"
-#include "lockstep/journal/memory_journal.hpp"
+#include "lockstep/journal/file_journal_writer.hpp"
+#include "lockstep/journal/format.hpp"
+#include "lockstep/journal/record_codec.hpp"
 #include "lockstep/risk_client/risk_client.hpp"
 #include "lockstep/support/log.hpp"
 
@@ -82,11 +89,47 @@ int run(const main_app::Options& options) {
                        std::ranges::to<std::vector>(),
         .shard_count = options.shards,
     };
-    // TODO(task-008): FileJournalWriter per shard. Until then nothing is durable.
-    support::warn("journal: using NullJournal - commands are NOT persisted (see docs/tasks/008)");
-    app::Engine engine{std::move(config),
-                       [](domain::ShardId) { return std::make_unique<journal::NullJournal>(); },
-                       clock};
+    // One journal file per shard (ADR-0004). The header records the shard's
+    // config so replay can refuse a journal recorded under another one
+    // (ADR-0012, ADR-0017). The Engine builds its own Router from the same
+    // inputs; Router::round_robin is a pure function of them, so both agree.
+    const bool journal_dir_created = std::filesystem::create_directories(options.journal_dir);
+    // A freshly created directory's entry in its parent is not durable until
+    // that parent is fsynced (fdatasync on a file inside it only covers the
+    // file's contents). Only EveryCommit promises crash durability, so only
+    // that policy needs to pay for it.
+    if (journal_dir_created && options.fsync_every_commit) {
+        const auto parent = options.journal_dir.parent_path();
+        const std::filesystem::path dir_to_sync =
+            parent.empty() ? std::filesystem::current_path() : parent;
+        if (const int error = journal::sync_directory(dir_to_sync); error != 0) {
+            throw std::runtime_error("journal: cannot fsync directory '" + dir_to_sync.string() +
+                                     "': " + std::generic_category().message(error));
+        }
+    }
+    const auto router = app::Router::round_robin(config.instruments, config.shard_count);
+    const auto sync =
+        options.fsync_every_commit ? journal::SyncPolicy::EveryCommit : journal::SyncPolicy::None;
+    // Captures by value what it needs from `config`: the Engine takes `config`
+    // by move before it calls the factory.
+    auto journal_factory =
+        [&router, &options, sync, shard_count = static_cast<std::uint32_t>(config.shard_count),
+         policy = config.risk_link_policy](domain::ShardId shard) -> std::unique_ptr<app::Journal> {
+        const auto instruments = router.instruments_of(shard);
+        const domain::ShardConfig shard_config{
+            .shard = shard,
+            .instruments = {instruments.begin(), instruments.end()},
+            .risk_link_policy = policy};
+        return journal::FileJournalWriter::create(
+            options.journal_dir,
+            journal::FileHeader{.shard = shard,
+                                .shard_count = shard_count,
+                                .config_hash = journal::config_hash(shard_config)},
+            sync);
+    };
+    app::Engine engine{std::move(config), std::move(journal_factory), clock};
+    support::info("journal: writing {} (fsync={})", options.journal_dir.string(),
+                  options.fsync_every_commit ? "commit" : "none");
 
     std::unique_ptr<risk_client::RiskClient> risk;
     if (options.risk_enabled) {

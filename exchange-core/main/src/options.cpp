@@ -65,6 +65,17 @@ std::expected<Options, std::string> parse_options(std::span<char* const> args) {
                 return std::unexpected(ids.error());
             }
             options.instruments = std::move(*ids);
+        } else if (key == "--journal-dir") {
+            if (value.empty()) {
+                return std::unexpected(std::string{"--journal-dir: a directory is required"});
+            }
+            options.journal_dir = value;
+        } else if (key == "--fsync") {
+            if (value != "none" && value != "commit") {
+                return std::unexpected("--fsync: expected 'none' or 'commit', got '" +
+                                       std::string{value} + "'");
+            }
+            options.fsync_every_commit = value == "commit";
         } else {
             return std::unexpected("unknown option '" + std::string{arg} + "'");
         }

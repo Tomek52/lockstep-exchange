@@ -106,6 +106,11 @@ build/debug/exchange-core/main/exchange-core --listen=127.0.0.1:50051 --risk-sen
 rust/target/debug/loadgen --target http://127.0.0.1:50051 --count 100 --instrument 2
 ```
 
+Journal files are created with `O_EXCL`, so restarting with the same
+`--journal-dir` (including `docker compose stop` followed by `start`) fails
+until task 009 adds recovery; remove the directory or pass a fresh
+`--journal-dir` first.
+
 ## Repository layout
 
 ```
@@ -139,7 +144,8 @@ ROADMAP.md                milestones → task specs
 | Runtime: shards + publisher on `std::jthread`, write-ahead ordering, lossless shutdown | ✅ lock-free SPSC egress ([task 005](docs/tasks/005-spsc-queue.md)) and MPSC ingress ([task 006](docs/tasks/006-mpsc-queue.md)); threads park on a `Doorbell` instead of polling, with runtime stats exposed ([task 007](docs/tasks/007-runtime-idle-and-stats.md)); runtime subscriptions with filtering and a slow-consumer policy ([task 011](docs/tasks/011-publisher-fanout.md)) |
 | Order entry over gRPC, end to end | ✅ |
 | Risk session handshake + inbound risk commands | ✅ (reports, acks, reconnect: task 014) |
-| Deterministic replay test (live vs replay, in memory) | ✅ (file journal: [M3](ROADMAP.md)) |
+| Write-ahead journal on disk: one file per shard, CRC32C-checked records, `--journal-dir`, `--fsync=none\|commit` | ✅ writer ([task 008](docs/tasks/008-journal-writer.md)); reader and recovery: task 009 |
+| Deterministic replay test (live vs replay, in memory) | ✅ (file-based replay: task 010) |
 | Market data stream | ⏳ task 013 |
 | risk-sentinel position/limit engine | ⏳ tasks 015–016 |
 

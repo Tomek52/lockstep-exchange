@@ -37,7 +37,7 @@ The single-writer runtime on its real queues, with honest idle behaviour.
 
 Every state reproducible from disk.
 
-- [ ] [008 Journal record codec, CRC32C, file writer](docs/tasks/008-journal-writer.md)
+- [x] [008 Journal record codec, CRC32C, file writer](docs/tasks/008-journal-writer.md)
 - [ ] [009 Lazy journal reader, recovery, fuzzer](docs/tasks/009-journal-reader.md)
 - [ ] [012 Instrument reference data and config file](docs/tasks/012-instrument-config.md)
 - [ ] [010 File-based replay tool and full determinism suite](docs/tasks/010-deterministic-replay.md)

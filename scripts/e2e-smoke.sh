@@ -5,7 +5,8 @@
 #   loadgen (Rust) --SubmitOrder--> exchange-core (C++) --Monitor--> risk-sentinel (Rust)
 #
 # Asserts: sentinel accepts the risk session, every order is acknowledged as
-# accepted, and exchange-core shuts down cleanly on SIGTERM.
+# accepted, exchange-core shuts down cleanly on SIGTERM, and it leaves one
+# journal file per shard (task 008) in a temporary journal directory.
 #
 # Usage: scripts/e2e-smoke.sh [--core-bin PATH] [--rust-bin-dir DIR]
 #   defaults: build/debug/exchange-core/main/exchange-core, rust/target/debug
@@ -25,6 +26,7 @@ done
 core_port="${CORE_PORT:-15051}"
 sentinel_port="${SENTINEL_PORT:-15052}"
 logs="$(mktemp -d)"
+journal_dir="${logs}/journal"
 core_pid=""
 sentinel_pid=""
 
@@ -64,7 +66,7 @@ wait_for_log "${logs}/sentinel.log" "risk-sentinel listening" "sentinel to liste
 
 echo "==> starting exchange-core on :${core_port}"
 "${core_bin}" --listen="127.0.0.1:${core_port}" --risk-sentinel="127.0.0.1:${sentinel_port}" \
-  --shards=2 --instruments=1,2,3,4 >"${logs}/core.log" 2>&1 &
+  --shards=2 --instruments=1,2,3,4 --journal-dir="${journal_dir}" >"${logs}/core.log" 2>&1 &
 core_pid=$!
 wait_for_log "${logs}/core.log" "exchange-core listening" "exchange-core to listen"
 
@@ -81,6 +83,20 @@ kill -TERM "${core_pid}"
 wait "${core_pid}"
 core_pid=""
 grep -q "exchange-core stopped cleanly" "${logs}/core.log"
+
+echo "==> journal files"
+journal_header_size=32  # FileHeader, ADR-0012
+for shard in 0 1; do
+  file="${journal_dir}/shard-${shard}.jnl"
+  [[ -f "${file}" ]] || { echo "missing journal: ${file}" >&2; exit 1; }
+  echo "    shard-${shard}.jnl: $(stat -c %s "${file}") bytes"
+done
+# Instruments are dealt round-robin by id, so instrument 2 lives on shard 1:
+# the loadgen orders must have been journaled there.
+if (( $(stat -c %s "${journal_dir}/shard-1.jnl") <= journal_header_size )); then
+  echo "shard-1.jnl holds no records" >&2
+  exit 1
+fi
 kill -TERM "${sentinel_pid}"
 wait "${sentinel_pid}" || true
 sentinel_pid=""

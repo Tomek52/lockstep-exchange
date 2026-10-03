@@ -25,9 +25,13 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libgrpc++1.51t64 libprotobuf32t64 \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --no-create-home lockstep
+ && useradd --system --no-create-home lockstep \
+ && install -d -o lockstep -g lockstep /var/lib/lockstep
 COPY --from=build /src/build/release/exchange-core/main/exchange-core /usr/local/bin/exchange-core
 USER lockstep
+# Journal files (task 008) go to ./journal by default; the image's only
+# writable place for the unprivileged user is this directory.
+WORKDIR /var/lib/lockstep
 EXPOSE 50051
 ENTRYPOINT ["exchange-core"]
 CMD ["--listen=0.0.0.0:50051", "--risk-sentinel=risk-sentinel:50052"]
