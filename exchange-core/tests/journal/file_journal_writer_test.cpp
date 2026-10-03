@@ -1,6 +1,8 @@
 #include "lockstep/journal/file_journal_writer.hpp"
 
 #include <algorithm>
+#include <cerrno>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -17,6 +19,8 @@
 #include "lockstep/journal/format.hpp"
 #include "lockstep/journal/record_codec.hpp"
 
+#include <sys/resource.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace lockstep::journal {
@@ -49,6 +53,44 @@ protected:
 
 private:
     fs::path dir_;
+};
+
+/// Forces write(2) to fail with EFBIG once a file would grow past `limit`
+/// bytes, without killing the process: SIGXFSZ, which write(2) raises by
+/// default when the limit is hit, is ignored for the lifetime of this guard.
+/// Deterministic and root-independent, unlike filesystem-permission tricks.
+class ScopedFileSizeLimit {
+public:
+    explicit ScopedFileSizeLimit(rlim_t limit) {
+        if (::getrlimit(RLIMIT_FSIZE, &old_limit_) != 0) {
+            throw std::runtime_error("getrlimit(RLIMIT_FSIZE) failed");
+        }
+        struct rlimit new_limit = old_limit_;
+        new_limit.rlim_cur = limit;
+        if (::setrlimit(RLIMIT_FSIZE, &new_limit) != 0) {
+            throw std::runtime_error("setrlimit(RLIMIT_FSIZE) failed");
+        }
+        struct sigaction ignore{};
+        ignore.sa_handler = SIG_IGN;
+        if (::sigaction(SIGXFSZ, &ignore, &old_action_) != 0) {
+            (void)::setrlimit(RLIMIT_FSIZE, &old_limit_);
+            throw std::runtime_error("sigaction(SIGXFSZ) failed");
+        }
+    }
+
+    ScopedFileSizeLimit(const ScopedFileSizeLimit&) = delete;
+    ScopedFileSizeLimit& operator=(const ScopedFileSizeLimit&) = delete;
+    ScopedFileSizeLimit(ScopedFileSizeLimit&&) = delete;
+    ScopedFileSizeLimit& operator=(ScopedFileSizeLimit&&) = delete;
+
+    ~ScopedFileSizeLimit() {
+        (void)::sigaction(SIGXFSZ, &old_action_, nullptr);
+        (void)::setrlimit(RLIMIT_FSIZE, &old_limit_);
+    }
+
+private:
+    struct rlimit old_limit_{};
+    struct sigaction old_action_{};
 };
 
 constexpr FileHeader header{.version = format_version,
@@ -161,6 +203,46 @@ TEST_F(FileJournalWriterTest, RefusesToOverwriteAnExistingJournal) {
 TEST_F(FileJournalWriterTest, ThrowsWhenDirectoryIsMissing) {
     EXPECT_THROW((void)FileJournalWriter::create(dir() / "missing", header, SyncPolicy::None),
                  std::runtime_error);
+}
+
+TEST_F(FileJournalWriterTest, CreatesFileWithOwnerOnlyPermissions) {
+    const auto writer = FileJournalWriter::create(dir(), header, SyncPolicy::None);
+    struct stat info{};
+    ASSERT_EQ(::stat((dir() / "shard-1.jnl").c_str(), &info), 0);
+    EXPECT_EQ(info.st_mode & 0777U, static_cast<unsigned>(S_IRUSR | S_IWUSR));
+}
+
+TEST_F(FileJournalWriterTest, HeaderWriteFailureLeavesNoFileBehind) {
+    const auto path = dir() / "shard-1.jnl";
+    const ScopedFileSizeLimit cap{0};  // the 32-byte header itself cannot fit
+    EXPECT_THROW((void)FileJournalWriter::create(dir(), header, SyncPolicy::None),
+                 std::runtime_error);
+    EXPECT_FALSE(fs::exists(path));
+}
+
+// After an I/O error the writer is poisoned (file_journal_writer.hpp): every
+// later append()/commit() returns IoFailure without touching the file again,
+// because it may already end in a half-written record.
+TEST_F(FileJournalWriterTest, IoFailurePoisonsWriterForAllLaterCalls) {
+    const auto writer = FileJournalWriter::create(dir(), header, SyncPolicy::None);
+    ASSERT_TRUE(writer->append(sequenced(0)).has_value());
+
+    // Cap the file at its current (header-only) size: the pending commit's
+    // write(2) must grow it, so it fails with EFBIG once the cap is in place.
+    const rlim_t limit = fs::file_size(dir() / "shard-1.jnl");
+    const ScopedFileSizeLimit cap{limit};
+
+    const auto committed = writer->commit();
+    ASSERT_FALSE(committed.has_value());
+    EXPECT_EQ(committed.error(), app::JournalError::IoFailure);
+
+    const auto appended = writer->append(sequenced(1));
+    ASSERT_FALSE(appended.has_value());
+    EXPECT_EQ(appended.error(), app::JournalError::IoFailure);
+
+    const auto committed_again = writer->commit();
+    ASSERT_FALSE(committed_again.has_value());
+    EXPECT_EQ(committed_again.error(), app::JournalError::IoFailure);
 }
 
 }  // namespace
