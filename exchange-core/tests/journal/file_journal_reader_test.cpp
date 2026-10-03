@@ -26,7 +26,8 @@
 #include <unistd.h>
 
 #ifndef LOCKSTEP_JOURNAL_DUMP_PATH
-#error "LOCKSTEP_JOURNAL_DUMP_PATH must name the journal-dump executable (tests/journal/CMakeLists.txt)"
+#error \
+    "LOCKSTEP_JOURNAL_DUMP_PATH must name the journal-dump executable (tests/journal/CMakeLists.txt)"
 #endif
 
 namespace lockstep::journal {
@@ -125,7 +126,9 @@ protected:
     }
     void TearDown() override { fs::remove_all(dir_); }
 
-    [[nodiscard]] fs::path path() const { return dir_ / FileJournalWriter::file_name(header.shard); }
+    [[nodiscard]] fs::path path() const {
+        return dir_ / FileJournalWriter::file_name(header.shard);
+    }
 
     /// Writes `count` commands (sequenced(0..count)) to the shard file.
     void write_journal(std::uint64_t count) const {
@@ -446,10 +449,10 @@ TEST_F(FileJournalReaderTest, NextVersionIsAVersionMismatch) {
 TEST_F(FileJournalReaderTest, ExpectationsThatMatchTheHeaderAreAccepted) {
     write_journal(3);
 
-    const ReadResult result = read_all(
-        path(), ReaderExpectations{.shard = header.shard,
-                                   .shard_count = header.shard_count,
-                                   .config_hash = header.config_hash});
+    const ReadResult result =
+        read_all(path(), ReaderExpectations{.shard = header.shard,
+                                            .shard_count = header.shard_count,
+                                            .config_hash = header.config_hash});
 
     EXPECT_FALSE(result.error.has_value());
     EXPECT_EQ(result.commands, commands_0_to(3));
@@ -535,8 +538,8 @@ TEST_F(FileJournalReaderTest, ParseRecordClassifiesEveryPrefixOfARecordAsTruncat
 // ---- Acceptance criterion 6: journal-dump ------------------------------------
 
 std::vector<std::string> run_journal_dump(const fs::path& file, int& exit_code) {
-    const std::string command = std::string{"\""} + LOCKSTEP_JOURNAL_DUMP_PATH + "\" \"" +
-                                file.string() + "\" 2>&1";
+    const std::string command =
+        std::string{"\""} + LOCKSTEP_JOURNAL_DUMP_PATH + "\" \"" + file.string() + "\" 2>&1";
     std::vector<std::string> lines;
     // NOLINTNEXTLINE(cert-env33-c): the command is built from paths this test owns
     std::FILE* pipe = ::popen(command.c_str(), "r");
@@ -566,8 +569,7 @@ TEST_F(FileJournalReaderTest, JournalDumpPrintsAHeaderLineAndOneLinePerRecord) {
 
     EXPECT_EQ(exit_code, 0);
     ASSERT_EQ(lines.size(), 10'001U);
-    EXPECT_EQ(lines[0],
-              "journal version=1 shard=1 shard_count=2 config_hash=0xfeedfacecafebeef");
+    EXPECT_EQ(lines[0], "journal version=1 shard=1 shard_count=2 config_hash=0xfeedfacecafebeef");
     EXPECT_EQ(lines[1],
               "seq=1 ts=1000000 NewOrder trader=0 instrument=2 Buy Limit 100@1 Gtc "
               "client_order_id=0");

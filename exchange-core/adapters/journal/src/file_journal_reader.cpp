@@ -272,8 +272,8 @@ std::expected<ParsedRecord, JournalError> parse_record(std::span<const std::byte
     if (bytes.size() < record_header_size) {
         return std::unexpected(JournalError::Truncated);
     }
-    const auto record = check_record_header(
-        decode_record_header(bytes.first<record_header_size>()));
+    const auto record =
+        check_record_header(decode_record_header(bytes.first<record_header_size>()));
     if (!record) {
         return std::unexpected(record.error());
     }
@@ -281,8 +281,8 @@ std::expected<ParsedRecord, JournalError> parse_record(std::span<const std::byte
     if (bytes.size() < total) {
         return std::unexpected(JournalError::Truncated);
     }
-    const auto command = decode_record_payload(*record, bytes.subspan(record_header_size,
-                                                                       record->payload_size));
+    const auto command =
+        decode_record_payload(*record, bytes.subspan(record_header_size, record->payload_size));
     if (!command) {
         return std::unexpected(command.error());
     }

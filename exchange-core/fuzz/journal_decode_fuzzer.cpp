@@ -50,8 +50,9 @@ void fuzz_framed_payload(std::span<const std::byte> bytes) {
     if (bytes.size() > journal::max_payload_size) {
         return;
     }
-    const auto header = journal::encode(journal::RecordHeader{
-        .payload_size = static_cast<std::uint32_t>(bytes.size()), .crc32c = journal::crc32c(bytes)});
+    const auto header = journal::encode(
+        journal::RecordHeader{.payload_size = static_cast<std::uint32_t>(bytes.size()),
+                              .crc32c = journal::crc32c(bytes)});
     std::vector<std::byte> record(header.begin(), header.end());
     record.insert(record.end(), bytes.begin(), bytes.end());
 

@@ -126,7 +126,8 @@ int main(int argc, char** argv) try {
         std::println(stderr, "usage: journal-dump <shard journal file>");
         return exit_usage;
     }
-    const std::filesystem::path path{argv[1]};  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    const std::filesystem::path path{
+        argv[1]};  // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 
     print_header(path);
     std::uint64_t records = 0;
