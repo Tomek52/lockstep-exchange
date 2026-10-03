@@ -1,9 +1,7 @@
-# Journal adapter: implements app::Journal. Deliberately free of protobuf and
-# gRPC (own binary format, ADR-0012) so the journal and the determinism tests
-# can run under ThreadSanitizer with fully instrumented code (ADR-0007).
-#
-# Task 008 added the record codec and the file writer; task 009 adds
-# src/file_journal_reader.cpp.
+# Journal adapter: implements app::Journal with the on-disk binary format of
+# ADR-0012 (the record codec and the file-backed writer). Deliberately free
+# of protobuf and gRPC so the journal and the determinism tests can run
+# under ThreadSanitizer with fully instrumented code (ADR-0007).
 add_library(lockstep_journal STATIC
   src/record_codec.cpp
   src/file_journal_writer.cpp)

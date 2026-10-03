@@ -33,8 +33,6 @@ namespace lockstep::journal {
 //   payload: SequencedCommand encoding, specified in record_codec.hpp
 //   (task 008).
 //
-//   config_hash: FNV-1a of the shard's output-relevant config (ADR-0017).
-//
 // A record whose header or payload runs past end-of-file is a torn tail write
 // (Truncated): readers stop there. A CRC mismatch anywhere else is Corrupt.
 
