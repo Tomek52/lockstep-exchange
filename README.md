@@ -147,7 +147,7 @@ ROADMAP.md                milestones → task specs
 | Write-ahead journal on disk: one file per shard, CRC32C-checked records, `--journal-dir`, `--fsync=none\|commit` | ✅ writer ([task 008](docs/tasks/008-journal-writer.md)); reader and recovery: task 009 |
 | Deterministic replay test (live vs replay, in memory) | ✅ (file-based replay: task 010) |
 | Market data stream | ⏳ task 013 |
-| risk-sentinel position/limit engine | ⏳ tasks 015–016 |
+| risk-sentinel position/limit engine | ✅ pure positions, PnL and limits ([task 015](docs/tasks/015-sentinel-positions-pnl.md)); Monitor session logic ⏳ task 016 |
 
 Verified locally on the skeleton (WSL2, Ubuntu 24.04):
 - all C++ tests on debug, clang-debug, asan-ubsan and tsan;
