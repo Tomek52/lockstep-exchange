@@ -49,7 +49,7 @@ flowchart TB
         grpc["<b>grpc</b><br/>OrderEntryService<br/>MarketDataService (task 013)<br/>GrpcServer"]
         risk["<b>risk_client</b><br/>Monitor session<br/>→ broadcast risk commands"]
         codec["<b>codec</b><br/>proto ⇄ domain<br/>(fuzzed)"]
-        jrnl["<b>journal</b><br/>binary format, CRC32C, FileJournalWriter,<br/>MemoryJournal; reader (task 009)"]
+        jrnl["<b>journal</b><br/>binary format, CRC32C, FileJournalWriter,<br/>MemoryJournal,<br/>FileJournalReader, recover_tail"]
     end
 
     subgraph app["Application  (threads + queues, no I/O)"]
