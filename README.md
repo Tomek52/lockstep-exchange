@@ -106,6 +106,11 @@ build/debug/exchange-core/main/exchange-core --listen=127.0.0.1:50051 --risk-sen
 rust/target/debug/loadgen --target http://127.0.0.1:50051 --count 100 --instrument 2
 ```
 
+Journal files are created with `O_EXCL`, so restarting with the same
+`--journal-dir` (including `docker compose stop` followed by `start`) fails
+until task 009 adds recovery; remove the directory or pass a fresh
+`--journal-dir` first.
+
 ## Repository layout
 
 ```
