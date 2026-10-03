@@ -78,14 +78,14 @@ std::vector<Golden> goldens() {
                             .price = Price{0x5152'5354'5556'5758LL},
                             .quantity = Quantity{0x6162'6364'6566'6768ULL}}),
          concat(golden_prefix,
-                bytes({0x01,                                            // tag NewOrder
-                       0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21,  // trader
-                       0x38, 0x37, 0x36, 0x35, 0x34, 0x33, 0x32, 0x31,  // client_order_id
-                       0x44, 0x43, 0x42, 0x41,                          // instrument
-                       0x01,                                            // side Sell
-                       0x01,                                            // type Market
-                       0x01,                                            // time_in_force Ioc
-                       0x58, 0x57, 0x56, 0x55, 0x54, 0x53, 0x52, 0x51,  // price
+                bytes({0x01,                                                // tag NewOrder
+                       0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21,      // trader
+                       0x38, 0x37, 0x36, 0x35, 0x34, 0x33, 0x32, 0x31,      // client_order_id
+                       0x44, 0x43, 0x42, 0x41,                              // instrument
+                       0x01,                                                // side Sell
+                       0x01,                                                // type Market
+                       0x01,                                                // time_in_force Ioc
+                       0x58, 0x57, 0x56, 0x55, 0x54, 0x53, 0x52, 0x51,      // price
                        0x68, 0x67, 0x66, 0x65, 0x64, 0x63, 0x62, 0x61}))},  // quantity
         {"NewOrderBuyLimitGtc",
          sequenced(NewOrder{.trader = TraderId{7},
@@ -97,23 +97,23 @@ std::vector<Golden> goldens() {
                             .price = Price{-2},
                             .quantity = Quantity{10}}),
          concat(golden_prefix,
-                bytes({0x01,                                            // tag NewOrder
-                       0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // trader
-                       0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // client_order_id
-                       0x09, 0x00, 0x00, 0x00,                          // instrument
-                       0x00,                                            // side Buy
-                       0x00,                                            // type Limit
-                       0x00,                                            // time_in_force Gtc
-                       0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  // price -2
+                bytes({0x01,                                                // tag NewOrder
+                       0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,      // trader
+                       0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,      // client_order_id
+                       0x09, 0x00, 0x00, 0x00,                              // instrument
+                       0x00,                                                // side Buy
+                       0x00,                                                // type Limit
+                       0x00,                                                // time_in_force Gtc
+                       0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,      // price -2
                        0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}))},  // quantity
         {"CancelOrder",
          sequenced(CancelOrder{.trader = TraderId{0x2122'2324'2526'2728ULL},
                                .instrument = InstrumentId{0x4142'4344U},
                                .order_id = OrderId{0x7172'7374'7576'7778ULL}}),
          concat(golden_prefix,
-                bytes({0x02,                                            // tag CancelOrder
-                       0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21,  // trader
-                       0x44, 0x43, 0x42, 0x41,                          // instrument
+                bytes({0x02,                                                // tag CancelOrder
+                       0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21,      // trader
+                       0x44, 0x43, 0x42, 0x41,                              // instrument
                        0x78, 0x77, 0x76, 0x75, 0x74, 0x73, 0x72, 0x71}))},  // order_id
         {"ModifyOrder",
          sequenced(ModifyOrder{.trader = TraderId{0x2122'2324'2526'2728ULL},
@@ -122,29 +122,29 @@ std::vector<Golden> goldens() {
                                .new_price = Price{0x5152'5354'5556'5758LL},
                                .new_quantity = Quantity{0x6162'6364'6566'6768ULL}}),
          concat(golden_prefix,
-                bytes({0x03,                                            // tag ModifyOrder
-                       0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21,  // trader
-                       0x44, 0x43, 0x42, 0x41,                          // instrument
-                       0x78, 0x77, 0x76, 0x75, 0x74, 0x73, 0x72, 0x71,  // order_id
-                       0x58, 0x57, 0x56, 0x55, 0x54, 0x53, 0x52, 0x51,  // new_price
+                bytes({0x03,                                                // tag ModifyOrder
+                       0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21,      // trader
+                       0x44, 0x43, 0x42, 0x41,                              // instrument
+                       0x78, 0x77, 0x76, 0x75, 0x74, 0x73, 0x72, 0x71,      // order_id
+                       0x58, 0x57, 0x56, 0x55, 0x54, 0x53, 0x52, 0x51,      // new_price
                        0x68, 0x67, 0x66, 0x65, 0x64, 0x63, 0x62, 0x61}))},  // new_quantity
         {"BlockTrader",
          sequenced(BlockTrader{.command_id = RiskCommandId{0x8182'8384'8586'8788ULL},
                                .trader = TraderId{0x2122'2324'2526'2728ULL}}),
          concat(golden_prefix,
-                bytes({0x04,                                            // tag BlockTrader
-                       0x88, 0x87, 0x86, 0x85, 0x84, 0x83, 0x82, 0x81,  // command_id
+                bytes({0x04,                                                // tag BlockTrader
+                       0x88, 0x87, 0x86, 0x85, 0x84, 0x83, 0x82, 0x81,      // command_id
                        0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21}))},  // trader
         {"UnblockTrader",
          sequenced(UnblockTrader{.command_id = RiskCommandId{0x8182'8384'8586'8788ULL},
                                  .trader = TraderId{0x2122'2324'2526'2728ULL}}),
          concat(golden_prefix,
-                bytes({0x05,                                            // tag UnblockTrader
-                       0x88, 0x87, 0x86, 0x85, 0x84, 0x83, 0x82, 0x81,  // command_id
+                bytes({0x05,                                                // tag UnblockTrader
+                       0x88, 0x87, 0x86, 0x85, 0x84, 0x83, 0x82, 0x81,      // command_id
                        0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21}))},  // trader
         {"KillSwitch",
-         sequenced(KillSwitch{.command_id = RiskCommandId{0x8182'8384'8586'8788ULL},
-                              .engaged = true}),
+         sequenced(
+             KillSwitch{.command_id = RiskCommandId{0x8182'8384'8586'8788ULL}, .engaged = true}),
          concat(golden_prefix,
                 bytes({0x06,                                            // tag KillSwitch
                        0x88, 0x87, 0x86, 0x85, 0x84, 0x83, 0x82, 0x81,  // command_id
@@ -155,9 +155,8 @@ std::vector<Golden> goldens() {
                 bytes({0x06,                                            // tag KillSwitch
                        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // command_id
                        0x00}))},                                        // engaged
-        {"RiskLinkStatus",
-         sequenced(RiskLinkStatus{.connected = true}),
-         concat(golden_prefix, bytes({0x07,     // tag RiskLinkStatus
+        {"RiskLinkStatus", sequenced(RiskLinkStatus{.connected = true}),
+         concat(golden_prefix, bytes({0x07,      // tag RiskLinkStatus
                                       0x01}))},  // connected
     };
 }

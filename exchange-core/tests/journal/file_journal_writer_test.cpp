@@ -12,11 +12,12 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 #include "lockstep/journal/crc32c.hpp"
 #include "lockstep/journal/format.hpp"
 #include "lockstep/journal/record_codec.hpp"
+
+#include <unistd.h>
 
 namespace lockstep::journal {
 namespace {
@@ -41,7 +42,8 @@ protected:
         std::ifstream in{path, std::ios::binary};
         const std::vector<char> chars{std::istreambuf_iterator<char>{in}, {}};
         std::vector<std::byte> out(chars.size());
-        std::ranges::transform(chars, out.begin(), [](char c) { return static_cast<std::byte>(c); });
+        std::ranges::transform(chars, out.begin(),
+                               [](char c) { return static_cast<std::byte>(c); });
         return out;
     }
 
@@ -148,7 +150,9 @@ TEST_F(FileJournalWriterTest, EmptyCommitWritesNothing) {
 }
 
 TEST_F(FileJournalWriterTest, RefusesToOverwriteAnExistingJournal) {
-    { (void)FileJournalWriter::create(dir(), header, SyncPolicy::None); }
+    {
+        (void)FileJournalWriter::create(dir(), header, SyncPolicy::None);
+    }
     EXPECT_THROW((void)FileJournalWriter::create(dir(), header, SyncPolicy::None),
                  std::runtime_error);
     EXPECT_EQ(fs::file_size(dir() / "shard-1.jnl"), file_header_size);
