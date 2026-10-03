@@ -16,3 +16,6 @@ target_link_libraries(lockstep_journal
 # compile_options carries only warning and sanitizer flags, not code; the app
 # layer allows it the same way.
 lockstep_restrict_links(lockstep_journal ALLOW lockstep::app lockstep::compile_options)
+
+# read_journal is a std::generator (GCC 14 false positive, see CompilerOptions.cmake).
+lockstep_allow_std_generator(src/file_journal_reader.cpp)

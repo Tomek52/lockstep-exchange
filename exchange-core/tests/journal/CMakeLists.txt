@@ -14,3 +14,6 @@ lockstep_add_test(lockstep_journal_tests
 add_dependencies(lockstep_journal_tests journal-dump)
 target_compile_definitions(lockstep_journal_tests PRIVATE
   LOCKSTEP_JOURNAL_DUMP_PATH="$<TARGET_FILE:journal-dump>")
+
+# The reader tests iterate std::generators (GCC 14 false positive, see CompilerOptions.cmake).
+lockstep_allow_std_generator(file_journal_reader_test.cpp)
