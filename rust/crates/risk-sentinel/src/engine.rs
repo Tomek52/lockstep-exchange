@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use crate::limits::RiskLimits;
-use crate::positions::{Lots, PositionBook, Side, Ticks};
+use crate::positions::{Lots, Notional, PositionBook, Side, Ticks};
 
 /// One side of an execution, decoded from an `ExecutionReport`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +75,10 @@ impl RiskEngine {
         // their net quantity is what just changed.
         self.check_position(fill.trader, fill.instrument, net_quantity, &mut actions);
 
+        // TODO(task-016): each fill rescans and sorts every position (traders_in,
+        // trader_pnl per holder, total_pnl); keep per-trader indexes and a
+        // running total if the Monitor stream makes this the hot path.
+        //
         // The fill moved the instrument's mark, so every trader holding it may
         // have a different PnL now, not just the trader who traded. Re-evaluate
         // the loss limit for all of them.
@@ -124,7 +128,7 @@ impl RiskEngine {
             return;
         }
         match self.book.trader_pnl(trader) {
-            Ok(pnl) if pnl < -self.limits.max_trader_loss => {
+            Ok(pnl) if loss_exceeds(pnl, self.limits.max_trader_loss) => {
                 self.blocked.insert(trader);
                 actions.push(RiskAction::BlockTrader {
                     trader,
@@ -147,13 +151,14 @@ impl RiskEngine {
     /// Engages the kill switch at most once, on aggregate loss or overflow.
     fn check_total(&mut self, actions: &mut Vec<RiskAction>) {
         match self.book.total_pnl() {
-            Ok(total) if total < -self.limits.kill_switch_loss => self.engage_kill_switch(
-                format!(
-                    "total pnl {total} < -{} (kill switch)",
-                    self.limits.kill_switch_loss
+            Ok(total) if loss_exceeds(total, self.limits.kill_switch_loss) => self
+                .engage_kill_switch(
+                    format!(
+                        "total pnl {total} < -{} (kill switch)",
+                        self.limits.kill_switch_loss
+                    ),
+                    actions,
                 ),
-                actions,
-            ),
             Ok(_) => {}
             Err(_) => self.engage_kill_switch(
                 "arithmetic overflow computing total pnl".to_owned(),
@@ -175,10 +180,17 @@ impl RiskEngine {
     }
 }
 
+/// `pnl < -limit`, without negating the limit: limits are plain `i128`
+/// fields, and negating `i128::MIN` would panic in debug and wrap (silently
+/// disabling the limit) in release. A PnL of `i128::MIN` is a loss beyond any
+/// limit.
+fn loss_exceeds(pnl: Notional, limit: Notional) -> bool {
+    pnl.checked_neg().is_none_or(|loss| loss > limit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::positions::Notional;
 
     fn limits() -> RiskLimits {
         RiskLimits {
@@ -521,5 +533,19 @@ mod tests {
         let actions = engine.on_fill(&fill(3, 2, Side::Sell, Ticks::MAX, 1));
         let reason = kill_switch_reason(&actions).expect("kill switch engaged");
         assert!(reason.contains("total pnl"), "{reason}");
+    }
+
+    #[test]
+    fn extreme_loss_limits_do_not_panic() {
+        // Limits are plain i128 fields until task 016 validates configuration;
+        // even i128::MIN must not panic or wrap into a disabled limit.
+        let mut engine = RiskEngine::new(RiskLimits {
+            max_abs_position: i128::MAX,
+            max_trader_loss: Notional::MIN,
+            kill_switch_loss: Notional::MIN,
+        });
+        let actions = engine.on_fill(&fill(1, 2, Side::Buy, 100, 1));
+        assert_eq!(blocked_traders(&actions), vec![1]);
+        assert!(kill_switch_reason(&actions).is_some());
     }
 }
