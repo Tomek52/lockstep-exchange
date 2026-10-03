@@ -323,7 +323,7 @@ std::expected<domain::SequencedCommand, app::JournalError> decode_payload(
     }
     return domain::SequencedCommand{.sequence = domain::SequenceNumber{*sequence},
                                     .timestamp = domain::Timestamp{*timestamp},
-                                    .command = std::move(*command)};
+                                    .command = *command};
 }
 
 }  // namespace lockstep::journal

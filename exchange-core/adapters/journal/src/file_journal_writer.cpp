@@ -14,6 +14,7 @@
 
 #include "lockstep/journal/crc32c.hpp"
 #include "lockstep/journal/record_codec.hpp"
+
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -48,6 +49,7 @@ int sync_data(int fd) noexcept {
 /// Makes the new directory entry durable: fdatasync on the file covers its
 /// contents, not the fact that it exists in `dir`.
 int sync_directory(const std::filesystem::path& dir) noexcept {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open(2) is variadic by POSIX
     const int fd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0) {
         return errno;
@@ -80,7 +82,9 @@ std::unique_ptr<FileJournalWriter> FileJournalWriter::create(const std::filesyst
     const std::filesystem::path path = dir / file_name(header.shard);
     // O_EXCL: never truncate or append to an existing journal. Reopening one
     // needs recovery of a possibly torn tail first (task 009).
-    constexpr mode_t file_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+    // Owner-only: the journal holds every trader's order flow.
+    constexpr mode_t file_mode = S_IRUSR | S_IWUSR;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open(2) is variadic by POSIX
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, file_mode);
     if (fd < 0) {
         throw_io("cannot create", path, errno);
