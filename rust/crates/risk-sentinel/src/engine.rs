@@ -178,6 +178,7 @@ impl RiskEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::positions::Notional;
 
     fn limits() -> RiskLimits {
         RiskLimits {
@@ -311,5 +312,214 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, RiskAction::KillSwitch { engaged: true, .. }))
         );
+    }
+
+    /// Limits that never block on position, so only PnL arithmetic can trip.
+    fn unbounded_position_limits() -> RiskLimits {
+        RiskLimits {
+            max_abs_position: i128::MAX,
+            ..limits()
+        }
+    }
+
+    fn kill_switch_reason(actions: &[RiskAction]) -> Option<&str> {
+        actions.iter().find_map(|action| match action {
+            RiskAction::KillSwitch {
+                engaged: true,
+                reason,
+            } => Some(reason.as_str()),
+            _ => None,
+        })
+    }
+
+    fn blocked_traders(actions: &[RiskAction]) -> Vec<u64> {
+        actions
+            .iter()
+            .filter_map(|action| match action {
+                RiskAction::BlockTrader { trader, .. } => Some(*trader),
+                RiskAction::KillSwitch { .. } => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn does_not_block_when_loss_equals_max_trader_loss() {
+        // Long 10_000 @ 1_000 marked to 900: loss exactly 1_000_000. Only a
+        // loss strictly beyond the limit blocks.
+        let mut engine = RiskEngine::new(limits());
+        assert!(
+            engine
+                .on_fill(&fill(1, 2, Side::Buy, 1_000, 10_000))
+                .is_empty()
+        );
+        assert!(engine.on_fill(&fill(2, 2, Side::Sell, 900, 1)).is_empty());
+    }
+
+    #[test]
+    fn does_not_engage_kill_switch_when_total_loss_equals_limit() {
+        // Two traders each long 10_000 @ 1_000, marked to 500: each loses
+        // 5_000_000 (within the raised per-trader limit), and the total is
+        // exactly -10_000_000, which must not engage the kill switch.
+        let mut engine = RiskEngine::new(RiskLimits {
+            max_trader_loss: 100_000_000,
+            ..limits()
+        });
+        assert!(
+            engine
+                .on_fill(&fill(1, 2, Side::Buy, 1_000, 10_000))
+                .is_empty()
+        );
+        assert!(
+            engine
+                .on_fill(&fill(2, 2, Side::Buy, 1_000, 10_000))
+                .is_empty()
+        );
+        // The seller of the marking lot is short 1 at 500, so it has no PnL.
+        let actions = engine.on_fill(&fill(3, 2, Side::Sell, 500, 1));
+        assert_eq!(kill_switch_reason(&actions), None);
+    }
+
+    #[test]
+    fn loss_block_reason_names_limit_and_values() {
+        let mut engine = RiskEngine::new(limits());
+        let _ = engine.on_fill(&fill(1, 2, Side::Buy, 1_000, 10_000));
+        let actions = engine.on_fill(&fill(2, 2, Side::Sell, 899, 1));
+        let reason = actions
+            .iter()
+            .find_map(|action| match action {
+                RiskAction::BlockTrader { trader: 1, reason } => Some(reason.as_str()),
+                _ => None,
+            })
+            .expect("trader 1 is blocked");
+        assert!(reason.contains("-1010000"), "{reason}");
+        assert!(reason.contains("1000000"), "{reason}");
+        assert!(reason.contains("loss limit"), "{reason}");
+    }
+
+    #[test]
+    fn kill_switch_reason_names_limit_and_values() {
+        let mut engine = RiskEngine::new(limits());
+        let _ = engine.on_fill(&fill(1, 2, Side::Buy, 2_000, 10_000));
+        let actions = engine.on_fill(&fill(2, 2, Side::Sell, 999, 1));
+        let reason = kill_switch_reason(&actions).expect("kill switch engaged");
+        assert!(reason.contains("-10010000"), "{reason}");
+        assert!(reason.contains("10000000"), "{reason}");
+        assert!(reason.contains("kill switch"), "{reason}");
+    }
+
+    #[test]
+    fn loss_blocks_trader_at_most_once_until_reset() {
+        let mut engine = RiskEngine::new(limits());
+        let _ = engine.on_fill(&fill(1, 2, Side::Buy, 1_000, 10_000));
+        let first = engine.on_fill(&fill(2, 2, Side::Sell, 899, 1));
+        assert_eq!(blocked_traders(&first), vec![1]);
+
+        // The mark falls further: trader 1 is still beyond the loss limit,
+        // but is already blocked.
+        let second = engine.on_fill(&fill(2, 2, Side::Sell, 800, 1));
+        assert!(blocked_traders(&second).is_empty());
+
+        engine.reset_trader(1);
+        let third = engine.on_fill(&fill(2, 2, Side::Sell, 800, 1));
+        assert_eq!(blocked_traders(&third), vec![1]);
+    }
+
+    #[test]
+    fn trader_blocked_on_position_is_not_blocked_again_on_loss() {
+        // One block per trader, whichever limit tripped first (ADR-0013).
+        let mut engine = RiskEngine::new(limits());
+        let first = engine.on_fill(&fill(1, 2, Side::Buy, 1_000, 10_001));
+        assert_eq!(blocked_traders(&first), vec![1]);
+        let second = engine.on_fill(&fill(2, 2, Side::Sell, 800, 1));
+        assert!(blocked_traders(&second).is_empty());
+    }
+
+    #[test]
+    fn one_fill_blocks_every_affected_trader_in_trader_order() {
+        // A single marking fill pushes several holders beyond the loss limit;
+        // the actions come out in ascending trader id regardless of HashMap
+        // iteration order (ADR-0004).
+        let mut engine = RiskEngine::new(RiskLimits {
+            kill_switch_loss: Notional::MAX,
+            ..limits()
+        });
+        let holders = [42, 7, 1_000, 3, 99, 15, 8, 64];
+        for trader in holders {
+            assert!(
+                engine
+                    .on_fill(&fill(trader, 2, Side::Buy, 1_000, 10_000))
+                    .is_empty()
+            );
+        }
+        let actions = engine.on_fill(&fill(5, 2, Side::Sell, 800, 1));
+        let mut expected = holders.to_vec();
+        expected.sort_unstable();
+        assert_eq!(blocked_traders(&actions), expected);
+    }
+
+    #[test]
+    fn overflow_on_buy_side_engages_kill_switch_without_panic() {
+        let mut engine = RiskEngine::new(limits());
+        let _ = engine.on_fill(&fill(1, 2, Side::Buy, Ticks::MAX, Lots::MAX));
+        let actions = engine.on_fill(&fill(1, 2, Side::Buy, Ticks::MAX, Lots::MAX));
+        let reason = kill_switch_reason(&actions).expect("kill switch engaged");
+        assert!(reason.contains("applying fill for trader 1"), "{reason}");
+    }
+
+    #[test]
+    fn overflow_engages_kill_switch_at_most_once() {
+        let mut engine = RiskEngine::new(limits());
+        let _ = engine.on_fill(&fill(1, 2, Side::Sell, Ticks::MAX, Lots::MAX));
+        let first = engine.on_fill(&fill(1, 2, Side::Sell, Ticks::MAX, Lots::MAX));
+        assert!(kill_switch_reason(&first).is_some());
+        let second = engine.on_fill(&fill(1, 2, Side::Sell, Ticks::MAX, Lots::MAX));
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn overflow_computing_trader_pnl_engages_kill_switch() {
+        // Trader 1 goes long 2 x u64::MAX lots at 1 tick (both fills apply
+        // fine), then a single lot trades at i64::MAX: marking that position
+        // overflows i128 inside trader 1's PnL.
+        let mut engine = RiskEngine::new(unbounded_position_limits());
+        assert!(
+            engine
+                .on_fill(&fill(1, 2, Side::Buy, 1, Lots::MAX))
+                .is_empty()
+        );
+        assert!(
+            engine
+                .on_fill(&fill(1, 2, Side::Buy, 1, Lots::MAX))
+                .is_empty()
+        );
+        let actions = engine.on_fill(&fill(2, 2, Side::Sell, Ticks::MAX, 1));
+        let reason = kill_switch_reason(&actions).expect("kill switch engaged");
+        assert!(reason.contains("computing pnl for trader 1"), "{reason}");
+    }
+
+    #[test]
+    fn overflow_computing_total_pnl_engages_kill_switch() {
+        // Traders 1 and 2 each hold u64::MAX lots bought at 1 tick in their own
+        // instrument, then each instrument trades at i64::MAX. Each trader's PnL
+        // fits in i128; their sum does not.
+        let mut engine = RiskEngine::new(unbounded_position_limits());
+        assert!(
+            engine
+                .on_fill(&fill(1, 1, Side::Buy, 1, Lots::MAX))
+                .is_empty()
+        );
+        assert!(
+            engine
+                .on_fill(&fill(3, 1, Side::Sell, Ticks::MAX, 1))
+                .is_empty()
+        );
+        assert!(
+            engine
+                .on_fill(&fill(2, 2, Side::Buy, 1, Lots::MAX))
+                .is_empty()
+        );
+        let actions = engine.on_fill(&fill(3, 2, Side::Sell, Ticks::MAX, 1));
+        let reason = kill_switch_reason(&actions).expect("kill switch engaged");
+        assert!(reason.contains("total pnl"), "{reason}");
     }
 }

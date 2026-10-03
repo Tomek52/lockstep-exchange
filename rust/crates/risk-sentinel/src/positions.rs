@@ -289,4 +289,27 @@ mod tests {
             Err(Overflow)
         );
     }
+
+    #[test]
+    fn pnl_sums_do_not_depend_on_hash_order() {
+        // Trader 1: short u64::MAX lots on instrument 0, long u64::MAX lots on
+        // instruments 1 and 2, all bought or sold at 1 tick, then every
+        // instrument trades at i64::MAX. The three PnLs are -y, +y, +y: the
+        // final sum fits in i128, but adding the two +y first does not. The
+        // fold must use a fixed order, never HashMap order, so every fresh book
+        // (each with its own hashing seed) must agree (ADR-0004).
+        let y = i128::from(Lots::MAX) * (i128::from(Ticks::MAX) - 1);
+        for _ in 0..20 {
+            let mut book = PositionBook::default();
+            book.apply(&fill(1, 0, Side::Sell, 1, Lots::MAX)).unwrap();
+            book.apply(&fill(1, 1, Side::Buy, 1, Lots::MAX)).unwrap();
+            book.apply(&fill(1, 2, Side::Buy, 1, Lots::MAX)).unwrap();
+            for instrument in 0..3 {
+                book.apply(&fill(2, instrument, Side::Sell, Ticks::MAX, 1))
+                    .unwrap();
+            }
+            assert_eq!(book.trader_pnl(1), Ok(y));
+            assert_eq!(book.total_pnl(), Ok(y));
+        }
+    }
 }

@@ -32,6 +32,30 @@ fn any_fill() -> impl Strategy<Value = Fill> {
         })
 }
 
+/// A fill that concentrates on a few traders and instruments and favours the
+/// extremes of the price and quantity domain, so that accumulation on one
+/// position (not only the cross-trader total) reaches the overflow corner.
+fn extreme_fill() -> impl Strategy<Value = Fill> {
+    let price = prop_oneof![
+        Just(Ticks::MAX),
+        Just(Ticks::MIN),
+        Just(0),
+        Just(1),
+        Just(-1),
+        any::<Ticks>(),
+    ];
+    let quantity = prop_oneof![Just(Lots::MAX), Just(0), Just(1), any::<Lots>()];
+    (0..3_u64, 0..2_u32, any_side(), price, quantity).prop_map(
+        |(trader, instrument, side, price, quantity)| Fill {
+            trader,
+            instrument,
+            side,
+            price,
+            quantity,
+        },
+    )
+}
+
 /// A "small" fill that cannot overflow accumulated cash, for the arithmetic
 /// identity properties below.
 fn small_fill() -> impl Strategy<Value = Fill> {
@@ -85,16 +109,21 @@ fn recompute_trader_pnl(fills: &[Fill], trader: u64) -> Notional {
 }
 
 proptest! {
-    /// (i) The book's PnL for a trader equals an independent recomputation.
+    /// (i) The book's PnL for every trader, and in total, equals an
+    /// independent recomputation.
     #[test]
     fn pnl_matches_independent_recomputation(fills in prop::collection::vec(small_fill(), 0..32)) {
         let mut book = PositionBook::default();
         for fill in &fills {
             book.apply(fill).expect("small fills never overflow");
         }
-        let trader = fills.first().map_or(0, |f| f.trader);
-        let expected = recompute_trader_pnl(&fills, trader);
-        prop_assert_eq!(book.trader_pnl(trader).expect("no overflow"), expected);
+        let mut expected_total: Notional = 0;
+        for trader in 0..4 {
+            let expected = recompute_trader_pnl(&fills, trader);
+            prop_assert_eq!(book.trader_pnl(trader).expect("no overflow"), expected);
+            expected_total += expected;
+        }
+        prop_assert_eq!(book.total_pnl().expect("no overflow"), expected_total);
     }
 
     /// (ii) Net quantity is additive across fills.
@@ -138,7 +167,9 @@ proptest! {
     /// (iv) `on_fill` never panics for any fill in the wire domain (ADR-0018:
     /// overflow degrades into a kill switch, never a panic or a wrap).
     #[test]
-    fn on_fill_never_panics(fills in prop::collection::vec(any_fill(), 0..16)) {
+    fn on_fill_never_panics(
+        fills in prop::collection::vec(prop_oneof![any_fill(), extreme_fill()], 0..16),
+    ) {
         let mut engine = RiskEngine::default();
         for fill in &fills {
             let actions = engine.on_fill(fill);
@@ -149,6 +180,19 @@ proptest! {
                     | RiskAction::KillSwitch { reason, .. } => prop_assert!(!reason.is_empty()),
                 }
             }
+        }
+    }
+
+    /// (v) `on_fill` is a pure function of the fill sequence: two engines (each
+    /// with its own `HashMap` hashing seed) emit identical actions (ADR-0004).
+    #[test]
+    fn on_fill_actions_do_not_depend_on_hash_order(
+        fills in prop::collection::vec(prop_oneof![small_fill(), extreme_fill()], 0..32),
+    ) {
+        let mut first = RiskEngine::default();
+        let mut second = RiskEngine::default();
+        for fill in &fills {
+            prop_assert_eq!(first.on_fill(fill), second.on_fill(fill));
         }
     }
 }
