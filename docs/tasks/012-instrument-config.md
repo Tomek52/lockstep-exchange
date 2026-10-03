@@ -18,6 +18,12 @@ new dependency in an ADR.
 - [ADR-0004](../adr/0004-deterministic-replay-via-per-shard-journal.md) and
   [ADR-0012](../adr/0012-journal-binary-format.md): the journal header pins a
   hash of the shard's specs, so they must come from a reproducible source.
+- [ADR-0017](../adr/0017-journal-config-hash-covers-shard-config.md):
+  `config_hash` folds in every instrument spec, while `ShardEngine` keeps
+  only the first occurrence of a given id (`try_emplace`). A config with
+  duplicate instrument ids would therefore hash differently from what the
+  engine actually runs, so `load_config`/`parse_config` must reject
+  duplicates rather than silently drop them.
 - [ADR-0007](../adr/0007-dependency-management-system-packages.md): new
   dependencies come from Ubuntu 24.04 apt, and must be added to
   `scripts/setup-ubuntu.sh` and `deploy/exchange-core.Dockerfile`.
