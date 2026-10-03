@@ -51,8 +51,10 @@ them into the prompt.
 
 - Run the `code-guard` agent on the diff. Fix every blocker and major; fix
   plainly correct nits; answer the rest in the PR. If a `developer` agent
-  wrote the code, send it the findings with `SendMessage` instead of
-  starting a new one: it still has the spec and the code in its context.
+  wrote the code and your tool can message a running agent (Claude Code:
+  `SendMessage`), send it the findings there: it still has the spec and the
+  code in its context. Otherwise start a new one with the spec path, the
+  diff range and the findings verbatim.
 - If the change touches `concurrency/`, atomics, threads, the shard runtime
   or the publisher, also run the `concurrency-auditor` agent.
 

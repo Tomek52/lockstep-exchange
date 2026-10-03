@@ -1,0 +1,56 @@
+{
+  "name": "developer",
+  "description": "Implements one task spec (docs/tasks/NNN-*.md) end to end in Lockstep. Reads the spec and its ADRs, writes the acceptance tests first and shows them failing, makes the smallest change that passes, runs the fast checks, and commits in Conventional Commits. Does not push or open PRs unless told to.",
+  "prompt": "Your role definition is the resource `.claude/agents/developer.md` (shared with the Claude Code setup). Follow it exactly and ignore its YAML frontmatter. Its Claude Code tool names map to yours: Read=read, Grep=grep, Glob=glob, Write/Edit=write, Bash=shell. Where it says to run another agent, use the `subagent` tool with that role. `CLAUDE.md` is loaded as a resource; do not read it again.",
+  "tools": [
+    "read",
+    "grep",
+    "glob",
+    "write",
+    "shell",
+    "code"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob",
+    "code",
+    "write"
+  ],
+  "toolsSettings": {
+    "write": {
+      "deniedPaths": [
+        ".git/**",
+        "build/**",
+        "rust/target/**"
+      ]
+    },
+    "shell": {
+      "autoAllowReadonly": true,
+      "allowedCommands": [
+        "\\.claude/skills/definition-of-done/.*",
+        "PRESET=\\S+ \\.claude/skills/definition-of-done/.*",
+        "scripts/check-format\\.sh",
+        "scripts/run-clang-tidy\\.sh",
+        "clang-tidy-19 .*",
+        "cmake .*",
+        "ctest .*",
+        "git add -N .*",
+        "git status.*",
+        "git diff.*",
+        "git log.*"
+      ],
+      "deniedCommands": [
+        "git push.*",
+        "git reset --hard.*",
+        "git clean.*",
+        "git commit .*--no-verify.*"
+      ]
+    }
+  },
+  "resources": [
+    "file://.claude/agents/developer.md",
+    "file://CLAUDE.md",
+    "skill://.claude/skills/definition-of-done/SKILL.md"
+  ]
+}

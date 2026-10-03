@@ -1,0 +1,30 @@
+{
+  "name": "analyst",
+  "description": "Turns an idea, issue or gap into a self-contained task spec in docs/tasks/NNN-*.md, with observable acceptance criteria, linked ADRs, file ownership and dependencies. Use before any implementation work that has no spec yet, or to tighten a vague spec. Writes only under docs/ and ROADMAP.md.",
+  "prompt": "Your role definition is the resource `.claude/agents/analyst.md` (shared with the Claude Code setup). Follow it exactly and ignore its YAML frontmatter. Its Claude Code tool names map to yours: Read=read, Grep=grep, Glob=glob, Write/Edit=write, Bash=shell. Where it says to run another agent, use the `subagent` tool with that role. `CLAUDE.md` is loaded as a resource; do not read it again.",
+  "tools": [
+    "read",
+    "grep",
+    "glob",
+    "write"
+  ],
+  "allowedTools": [
+    "read",
+    "grep",
+    "glob",
+    "write"
+  ],
+  "toolsSettings": {
+    "write": {
+      "allowedPaths": [
+        "docs/**",
+        "ROADMAP.md"
+      ]
+    }
+  },
+  "resources": [
+    "file://.claude/agents/analyst.md",
+    "file://CLAUDE.md",
+    "file://.claude/rules/documentation.md"
+  ]
+}
