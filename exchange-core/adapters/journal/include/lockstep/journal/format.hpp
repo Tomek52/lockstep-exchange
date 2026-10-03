@@ -24,14 +24,16 @@ namespace lockstep::journal {
 //    12  shard_id       4
 //    16  shard_count    4
 //    20  reserved       4  (zero)
-//    24  config_hash    8  hash of the shard's InstrumentSpecs; replay refuses a mismatch
+//    24  config_hash    8  hash of the shard config (ADR-0017); replay refuses a mismatch
 //
 //   RecordHeader (8 bytes)
 //     0  payload_size   4
 //     4  crc32c         4  of the payload
 //
-//   payload: SequencedCommand encoding, defined by task 008
-//   (docs/tasks/008-journal-writer.md).
+//   payload: SequencedCommand encoding, specified in record_codec.hpp
+//   (task 008).
+//
+//   config_hash: FNV-1a of the shard's output-relevant config (ADR-0017).
 //
 // A record whose header or payload runs past end-of-file is a torn tail write
 // (Truncated): readers stop there. A CRC mismatch anywhere else is Corrupt.

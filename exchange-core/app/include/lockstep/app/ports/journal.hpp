@@ -17,7 +17,7 @@ enum class JournalError : std::uint8_t {
     Corrupt,          ///< bad magic, CRC mismatch, impossible length
     Truncated,        ///< torn write at the tail (recoverable: stop reading there)
     VersionMismatch,  ///< file written by an incompatible format version
-    ConfigMismatch,   ///< shard id/count or instrument set differs from the running config
+    ConfigMismatch,   ///< shard id/count or shard config (ADR-0017) differs from the running one
 };
 
 [[nodiscard]] constexpr std::string_view to_string(JournalError error) noexcept {
