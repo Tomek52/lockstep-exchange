@@ -4,7 +4,8 @@
 # under ThreadSanitizer with fully instrumented code (ADR-0007).
 add_library(lockstep_journal STATIC
   src/record_codec.cpp
-  src/file_journal_writer.cpp)
+  src/file_journal_writer.cpp
+  src/file_journal_reader.cpp)
 add_library(lockstep::journal ALIAS lockstep_journal)
 
 target_include_directories(lockstep_journal PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

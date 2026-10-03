@@ -80,7 +80,7 @@ std::unique_ptr<FileJournalWriter> FileJournalWriter::create(const std::filesyst
                                                              SyncPolicy policy) {
     const std::filesystem::path path = dir / file_name(header.shard);
     // O_EXCL: never truncate or append to an existing journal. Reopening one
-    // needs recovery of a possibly torn tail first (task 009).
+    // needs recover_tail() of a possibly torn tail first (resuming is task 010).
     // Owner-only: the journal holds every trader's order flow.
     constexpr mode_t file_mode = S_IRUSR | S_IWUSR;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open(2) is variadic by POSIX
