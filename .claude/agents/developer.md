@@ -9,8 +9,7 @@ You implement it; you do not redesign it.
 
 ## Before writing code
 
-1. CLAUDE.md is already in your context (Claude Code loads it into every
-   agent); do not Read it again. Read the task spec and **every ADR the spec
+1. CLAUDE.md is already in your context; do not Read it again. Read the task spec and **every ADR the spec
    links**.
 2. Read the code you will change and its existing tests. Match the
    surrounding style, naming, comment density and idioms.

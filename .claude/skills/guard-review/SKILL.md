@@ -10,8 +10,8 @@ argument-hint: "[PR number | branch | empty for the current diff]"
 
 - Empty `$ARGUMENTS`: `git diff origin/main...HEAD` plus uncommitted changes.
 - A branch: `git diff origin/main...<branch>`.
-- A PR number: read it with the GitHub tools (diff, description, linked
-  task), and review the head commit.
+- A PR number: read it with the GitHub tools or `gh pr view` / `gh pr diff`
+  (diff, description, linked task), and review the head commit.
 
 Find the task spec it implements (`Task: NNN` in commit bodies or the PR
 title) and read it with its ADRs.
@@ -36,8 +36,8 @@ without evidence becomes a question, not a finding.
 - **Local review:** print the findings, blockers first, then the verdict.
 - **PR review** (only when asked to post): one pending review with inline
   comments on the lines, submitted with `REQUEST_CHANGES` if there is any
-  blocker or major, otherwise `COMMENT`. End every comment with the Claude
-  Code attribution footer.
+  blocker or major, otherwise `COMMENT`. End every comment with the
+  attribution footer of the tool that posts it, if it has one.
 - If the review caught an LLM mistake worth remembering, propose an entry
   for **Lessons learned** in `docs/ai-workflow.md` (what was produced, why
   it was wrong, how it was caught, what prevents a repeat).

@@ -41,7 +41,7 @@ test to get green.
 
 ## History
 
-- On branches you created (`claude/*`, `task/*`), add new commits; do not
+- On branches you created (`claude/*`, `kiro/*`, `task/*`), add new commits; do not
   rewrite pushed history unless the user asks. On someone else's branch,
   never rebase, amend or force-push; merge `origin/main` instead.
 - Commits follow CLAUDE.md section 5: Conventional Commits, `Task: NNN` in
