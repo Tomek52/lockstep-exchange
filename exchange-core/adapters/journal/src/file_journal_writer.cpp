@@ -12,6 +12,7 @@
 #include <system_error>
 #include <utility>
 
+#include "lockstep/app/fatal.hpp"
 #include "lockstep/journal/crc32c.hpp"
 #include "lockstep/journal/record_codec.hpp"
 
@@ -130,11 +131,12 @@ std::expected<void, app::JournalError> FileJournalWriter::append(
     encode_payload(command, buffer_);
 
     const auto payload = std::span{buffer_}.subspan(start + record_header_size);
-    // Cannot happen with today's commands (the largest is a few dozen bytes);
-    // the check keeps the writer from producing a record every reader rejects.
+    // Cannot happen with today's commands (the largest is a few dozen bytes):
+    // a writer that produced one would be a programming bug, not journal
+    // corruption to report through JournalError, so it is fatal like other
+    // invariant breaches (ADR-0008).
     if (payload.size() > max_payload_size) {
-        buffer_.resize(start);
-        return std::unexpected(app::JournalError::Corrupt);
+        app::fatal("journal: encoded payload exceeds max_payload_size");
     }
     const RecordHeader header{.payload_size = static_cast<std::uint32_t>(payload.size()),
                               .crc32c = crc32c(payload)};
