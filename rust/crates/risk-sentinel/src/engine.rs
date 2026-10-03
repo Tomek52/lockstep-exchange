@@ -95,6 +95,12 @@ impl RiskEngine {
         self.blocked.remove(&trader);
     }
 
+    /// Re-arms the kill switch after an operator disengages it, so a later
+    /// breach engages it again.
+    pub fn reset_kill_switch(&mut self) {
+        self.kill_switch_engaged = false;
+    }
+
     /// Blocks a trader at most once when their net position in `instrument`
     /// exceeds the absolute limit.
     fn check_position(
@@ -546,6 +552,17 @@ mod tests {
         });
         let actions = engine.on_fill(&fill(1, 2, Side::Buy, 100, 1));
         assert_eq!(blocked_traders(&actions), vec![1]);
+        assert!(kill_switch_reason(&actions).is_some());
+    }
+
+    #[test]
+    fn kill_switch_engages_again_after_reset() {
+        let mut engine = RiskEngine::new(limits());
+        let _ = engine.on_fill(&fill(1, 2, Side::Buy, 2_000, 10_000));
+        assert!(kill_switch_reason(&engine.on_fill(&fill(2, 2, Side::Sell, 999, 1))).is_some());
+
+        engine.reset_kill_switch();
+        let actions = engine.on_fill(&fill(2, 2, Side::Sell, 998, 1));
         assert!(kill_switch_reason(&actions).is_some());
     }
 }
