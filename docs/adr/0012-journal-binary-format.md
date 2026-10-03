@@ -1,6 +1,6 @@
 # 12. Own binary journal format, not protobuf
 
-- **Status:** Accepted
+- **Status:** Accepted; the `config_hash` definition is superseded by [ADR-0017](0017-journal-config-hash-covers-shard-config.md)
 - **Date:** 2026-09-27
 
 ## Context

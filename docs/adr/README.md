@@ -17,11 +17,12 @@ decision; a new ADR supersedes it and the old one's status says so.
 | [0009](0009-toolchain-baseline-and-feature-fallbacks.md) | Toolchain baseline and C++23 feature fallbacks | Accepted |
 | [0010](0010-no-cpp20-modules-for-now.md) | No C++20 modules (for now) | Accepted |
 | [0011](0011-lock-free-queues-and-memory-ordering.md) | Lock-free queue designs and memory-ordering policy | Accepted |
-| [0012](0012-journal-binary-format.md) | Own binary journal format, not protobuf | Accepted |
+| [0012](0012-journal-binary-format.md) | Own binary journal format, not protobuf | Accepted (`config_hash` superseded by 0017) |
 | [0013](0013-risk-feedback-loop.md) | Risk feedback loop semantics | Accepted |
 | [0014](0014-testing-strategy.md) | Testing strategy | Accepted |
 | [0015](0015-documentation-site-and-versioned-anchors.md) | Documentation site (MkDocs) and versioned requirement anchors | Proposed |
 | [0016](0016-agent-context-budget.md) | Agent context budget: no duplicate loading, quiet logs, path-scoped rules | Proposed |
+| [0017](0017-journal-config-hash-covers-shard-config.md) | Journal `config_hash` covers the whole output-relevant shard config | Accepted |
 
 To add one: copy the structure of any ADR, take the next number, add it to
 this table, and link it from the code or task spec that motivated it.

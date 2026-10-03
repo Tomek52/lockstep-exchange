@@ -25,13 +25,10 @@ Persist every shard's commands to disk in the format of
 - Commands: `exchange-core/domain/include/lockstep/domain/commands.hpp`. Use
   `CommandTag`, never `variant::index()`.
 - **Note (task 004):** `RiskLinkPolicy` (FailOpen/FailClosed) changes
-  `ShardEngine`'s output, not just its `InstrumentSpec`s, so `config_hash`
-  must also cover the shard's `RiskLinkPolicy`; otherwise replaying a
-  journal under a different policy than it was recorded with diverges
-  silently (ADR-0004, ADR-0012). This contradicts ADR-0012's definition of
-  `config_hash` (instrument specs only) and the `config_hash(specs)`
-  signature below, so it needs a new ADR superseding that part of ADR-0012
-  first; then take the policy (or the whole `ShardConfig`) as input.
+  `ShardEngine`'s output, so `config_hash` covers the whole
+  output-relevant `ShardConfig` (instrument specs and the policy), as decided
+  in [ADR-0017](../adr/0017-journal-config-hash-covers-shard-config.md#adr0017-decision-v1),
+  which supersedes that part of ADR-0012.
 
 ## Interfaces to implement
 
@@ -47,8 +44,8 @@ void encode_payload(const domain::SequencedCommand& command, std::vector<std::by
 [[nodiscard]] std::expected<domain::SequencedCommand, app::JournalError>
 decode_payload(std::span<const std::byte> payload) noexcept;
 
-/// Hash of the shard's instrument specs (sorted by id) for FileHeader::config_hash.
-[[nodiscard]] std::uint64_t config_hash(std::span<const domain::InstrumentSpec> specs) noexcept;
+/// FNV-1a of the shard's output-relevant config for FileHeader::config_hash (ADR-0017).
+[[nodiscard]] constexpr std::uint64_t config_hash(const domain::ShardConfig& config) noexcept;
 
 // lockstep/journal/file_journal_writer.hpp
 enum class SyncPolicy : std::uint8_t { None, EveryCommit };
@@ -70,8 +67,8 @@ public:
   records with as few `write` calls as possible, and handles short writes.
 - **`main`:** add `--journal-dir=DIR` (default `./journal`) and
   `--fsync=none|commit` (default `commit`). Build the header with the shard
-  id, shard count and `config_hash` of the shard's instruments (use
-  `engine.router().instruments_of(shard)`). Delete the NullJournal warning.
+  id, shard count and `config_hash` of the shard's config (instruments from
+  `Router::instruments_of(shard)` plus the risk link policy). Delete the NullJournal warning.
 
 ## Acceptance criteria
 
