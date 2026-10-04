@@ -153,6 +153,8 @@ jobs:
         run: cd rust && cargo build --locked
       - name: Smoke test
         run: scripts/e2e-smoke.sh
+      - name: Smoke test (from config file)
+        run: scripts/e2e-smoke.sh --config config/exchange.json
 
   docker:
     name: Docker images

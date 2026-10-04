@@ -39,7 +39,7 @@ Every state reproducible from disk.
 
 - [x] [008 Journal record codec, CRC32C, file writer](docs/tasks/008-journal-writer.md)
 - [x] [009 Lazy journal reader, recovery, fuzzer](docs/tasks/009-journal-reader.md)
-- [ ] [012 Instrument reference data and config file](docs/tasks/012-instrument-config.md)
+- [x] [012 Instrument reference data and config file](docs/tasks/012-instrument-config.md)
 - [ ] [010 File-based replay tool and full determinism suite](docs/tasks/010-deterministic-replay.md)
 
 ## M4: Risk loop and market data
