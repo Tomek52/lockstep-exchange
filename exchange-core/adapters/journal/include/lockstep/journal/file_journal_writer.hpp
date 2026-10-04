@@ -43,7 +43,8 @@ class FileJournalWriter final : public app::Journal {
 public:
     /// Creates `<dir>/shard-<id>.jnl` and writes `header`. Throws
     /// std::runtime_error if `dir` does not exist or the file already exists
-    /// (a startup error, ADR-0008; recovery of an existing journal is task 009).
+    /// (a startup error, ADR-0008). Opening an existing journal to append needs
+    /// recover_tail() first and is task 010.
     [[nodiscard]] static std::unique_ptr<FileJournalWriter> create(const std::filesystem::path& dir,
                                                                    const FileHeader& header,
                                                                    SyncPolicy policy);

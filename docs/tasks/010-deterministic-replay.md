@@ -73,11 +73,20 @@ e2e script can then compare live and replayed digests.
 4. **Crash recovery:** truncate a shard journal mid-record, then
    `recover_tail`, then replay. The result equals the live output up to the
    last complete record.
-5. **Tool check:** `scripts/e2e-smoke.sh` runs `lockstep-replay` on the
+5. **Restart:** `exchange-core` started again on a `--journal-dir` that
+   already holds journals (for example after `docker compose stop` and
+   `start`) starts successfully instead of failing on `O_EXCL`. Task 009 left
+   this decision here: after `recover_tail`, either resume appending to the
+   recovered file or start a new journal generation that replay reads in
+   order. Record the choice in an ADR. A journal that `recover_tail` refuses
+   (`Corrupt`, including a zero-filled tail that a crash under
+   `--fsync=none` can leave) stops startup with a message naming the file;
+   it is never deleted or truncated automatically.
+6. **Tool check:** `scripts/e2e-smoke.sh` runs `lockstep-replay` on the
    run's journal dir and compares its digest lines with
    `--print-digest-on-exit` output.
-6. The suite runs under tsan in under 30 s on CI hardware.
-7. Presets debug, asan-ubsan and tsan pass; clang-tidy is clean.
+7. The suite runs under tsan in under 30 s on CI hardware.
+8. Presets debug, asan-ubsan and tsan pass; clang-tidy is clean.
 
 ## Files expected to change
 
@@ -85,6 +94,7 @@ e2e script can then compare live and replayed digests.
 - `exchange-core/app/include/lockstep/app/digest.hpp`, `exchange-core/app/src/digest.cpp`, `app/CMakeLists.txt`
 - `exchange-core/main/src/replay_main.cpp` (new), `exchange-core/main/src/main.cpp` (flag), `exchange-core/main/CMakeLists.txt`
 - `scripts/e2e-smoke.sh`
+- `exchange-core/adapters/journal/*` (resume or new generation) and a new ADR
 
 ## Out of scope
 
