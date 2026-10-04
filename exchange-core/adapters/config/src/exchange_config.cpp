@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_set>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -51,6 +52,35 @@ template <std::size_t N>
         }
     }
     return std::nullopt;
+}
+
+// Reads an integer field strictly. get<std::int64_t>() alone would truncate
+// a fractional literal (100.7 -> 100), wrap an unsigned literal above
+// INT64_MAX, and report a type mismatch without naming the field.
+[[nodiscard]] std::expected<std::int64_t, std::string> read_integer(const json& object,
+                                                                    const char* key,
+                                                                    std::string_view where) {
+    const auto& value = object.at(key);
+    const auto field = std::string{where} + key;
+    if (!value.is_number_integer()) {
+        return std::unexpected(field + ": must be an integer");
+    }
+    if (value.is_number_unsigned() &&
+        value.get<std::uint64_t>() >
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        return std::unexpected(field + ": out of range");
+    }
+    return value.get<std::int64_t>();
+}
+
+[[nodiscard]] std::expected<std::string, std::string> read_string(const json& object,
+                                                                  const char* key,
+                                                                  std::string_view where) {
+    const auto& value = object.at(key);
+    if (!value.is_string()) {
+        return std::unexpected(std::string{where} + key + ": must be a string");
+    }
+    return value.get<std::string>();
 }
 
 [[nodiscard]] std::expected<domain::RiskLinkPolicy, std::string> parse_policy(const json& root) {
@@ -94,7 +124,12 @@ template <std::size_t N>
     // otherwise static_cast a negative JSON literal into an unsigned field,
     // silently wrapping e.g. "max_order_quantity": -1 into a huge value that
     // sails past the ==0 check. Reject such inputs at parse time (ADR-0019).
-    const auto id = item.at("id").get<std::int64_t>();
+    const std::string prefix = where + ".";
+    const auto id_field = read_integer(item, "id", prefix);
+    if (!id_field) {
+        return std::unexpected(id_field.error());
+    }
+    const auto id = *id_field;
     if (id < 1 || id > std::numeric_limits<std::uint32_t>::max()) {
         return std::unexpected(where + ": id must be in [1, 4294967295], got " +
                                std::to_string(id));
@@ -104,9 +139,17 @@ template <std::size_t N>
         return std::unexpected(where + ": duplicate instrument id " + std::to_string(id_u));
     }
 
-    const auto min_price = item.at("min_price_ticks").get<std::int64_t>();
-    const auto max_price = item.at("max_price_ticks").get<std::int64_t>();
-    const auto max_qty = item.at("max_order_quantity").get<std::int64_t>();
+    const auto min_price_field = read_integer(item, "min_price_ticks", prefix);
+    const auto max_price_field = read_integer(item, "max_price_ticks", prefix);
+    const auto max_qty_field = read_integer(item, "max_order_quantity", prefix);
+    for (const auto* field : {&min_price_field, &max_price_field, &max_qty_field}) {
+        if (!*field) {
+            return std::unexpected(field->error());
+        }
+    }
+    const auto min_price = *min_price_field;
+    const auto max_price = *max_price_field;
+    const auto max_qty = *max_qty_field;
 
     if (min_price < 1) {
         return std::unexpected(where + ": min_price_ticks must be >= 1, got " +
@@ -124,15 +167,24 @@ template <std::size_t N>
     // (max_price_ticks * max_order_quantity) is caught at runtime by the
     // domain's checked arithmetic (ADR-0005), not here.
 
+    auto symbol = read_string(item, "symbol", prefix);
+    auto tick_size = read_string(item, "tick_size", prefix);
+    auto lot_size = read_string(item, "lot_size", prefix);
+    for (const auto* field : {&symbol, &tick_size, &lot_size}) {
+        if (!*field) {
+            return std::unexpected(field->error());
+        }
+    }
+
     out.instruments.push_back(domain::InstrumentSpec{
         .id = domain::InstrumentId{id_u},
         .min_price = domain::Price{min_price},
         .max_price = domain::Price{max_price},
         .max_order_quantity = domain::Quantity{static_cast<std::uint64_t>(max_qty)}});
     out.metadata.push_back(InstrumentMetadata{.id = domain::InstrumentId{id_u},
-                                              .symbol = item.at("symbol").get<std::string>(),
-                                              .tick_size = item.at("tick_size").get<std::string>(),
-                                              .lot_size = item.at("lot_size").get<std::string>()});
+                                              .symbol = std::move(*symbol),
+                                              .tick_size = std::move(*tick_size),
+                                              .lot_size = std::move(*lot_size)});
     return {};
 }
 
@@ -152,7 +204,11 @@ template <std::size_t N>
 
     ExchangeConfig config;
 
-    const auto shards = root.at("shards").get<std::int64_t>();
+    const auto shards_field = read_integer(root, "shards", "");
+    if (!shards_field) {
+        return std::unexpected(shards_field.error());
+    }
+    const auto shards = *shards_field;
     if (shards < 1) {
         return std::unexpected("shards must be >= 1, got " + std::to_string(shards));
     }
@@ -185,8 +241,8 @@ template <std::size_t N>
 
 std::expected<ExchangeConfig, std::string> parse_config(std::string_view text) {
     // allow_exceptions=false so a parse error returns a discarded value we can
-    // report, rather than throwing; a type mismatch inside parse_root (reading
-    // a string where a number is expected) still throws and is caught below.
+    // report, rather than throwing. parse_root checks every type before
+    // reading it; the catch below is a safety net so nothing escapes (ADR-0008).
     json root = json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (root.is_discarded()) {
         return std::unexpected(std::string{"invalid JSON: could not parse the document"});
@@ -194,7 +250,6 @@ std::expected<ExchangeConfig, std::string> parse_config(std::string_view text) {
     try {
         return parse_root(root);
     } catch (const json::exception& e) {
-        // A type mismatch on get<T>() lands here; name what we were reading.
         return std::unexpected(std::string{"invalid value: "} + e.what());
     }
 }

@@ -138,6 +138,52 @@ TEST(ParseConfig, RejectsNegativeQuantityLimitInsteadOfWrapping) {
     EXPECT_NE(parse_error(json).find("max_order_quantity"), std::string::npos);
 }
 
+TEST(ParseConfig, RejectsFractionalQuantityLimitInsteadOfTruncating) {
+    // get<std::int64_t>() would silently truncate 100.7 to 100.
+    constexpr std::string_view json = R"({
+      "shards": 1,
+      "instruments": [
+        { "id": 1, "symbol": "A", "tick_size": "0.01", "lot_size": "1",
+          "min_price_ticks": 1, "max_price_ticks": 10, "max_order_quantity": 100.7 }
+      ]
+    })";
+    EXPECT_NE(parse_error(json).find("max_order_quantity"), std::string::npos);
+}
+
+TEST(ParseConfig, RejectsPriceBeyondSignedRangeInsteadOfWrapping) {
+    // 2^63 is a valid JSON unsigned integer that would wrap to INT64_MIN.
+    constexpr std::string_view json = R"({
+      "shards": 1,
+      "instruments": [
+        { "id": 1, "symbol": "A", "tick_size": "0.01", "lot_size": "1",
+          "min_price_ticks": 1, "max_price_ticks": 9223372036854775808, "max_order_quantity": 5 }
+      ]
+    })";
+    EXPECT_NE(parse_error(json).find("max_price_ticks"), std::string::npos);
+}
+
+TEST(ParseConfig, WrongTypeNamesTheField) {
+    constexpr std::string_view json = R"({
+      "shards": "2",
+      "instruments": [
+        { "id": 1, "symbol": "A", "tick_size": "0.01", "lot_size": "1",
+          "min_price_ticks": 1, "max_price_ticks": 10, "max_order_quantity": 5 }
+      ]
+    })";
+    EXPECT_NE(parse_error(json).find("shards"), std::string::npos);
+}
+
+TEST(ParseConfig, NonStringSymbolNamesTheField) {
+    constexpr std::string_view json = R"({
+      "shards": 1,
+      "instruments": [
+        { "id": 1, "symbol": 42, "tick_size": "0.01", "lot_size": "1",
+          "min_price_ticks": 1, "max_price_ticks": 10, "max_order_quantity": 5 }
+      ]
+    })";
+    EXPECT_NE(parse_error(json).find("symbol"), std::string::npos);
+}
+
 TEST(ParseConfig, RejectsNonPositiveInstrumentId) {
     constexpr std::string_view json = R"({
       "shards": 1,
