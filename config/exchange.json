@@ -1,0 +1,14 @@
+{
+  "shards": 2,
+  "risk_link_policy": "fail_open",
+  "instruments": [
+    { "id": 1, "symbol": "LKS-A", "tick_size": "0.01", "lot_size": "1",
+      "min_price_ticks": 1, "max_price_ticks": 100000000, "max_order_quantity": 1000000 },
+    { "id": 2, "symbol": "LKS-B", "tick_size": "0.01", "lot_size": "1",
+      "min_price_ticks": 1, "max_price_ticks": 100000000, "max_order_quantity": 1000000 },
+    { "id": 3, "symbol": "LKS-C", "tick_size": "0.05", "lot_size": "1",
+      "min_price_ticks": 1, "max_price_ticks": 100000000, "max_order_quantity": 1000000 },
+    { "id": 4, "symbol": "LKS-D", "tick_size": "0.05", "lot_size": "1",
+      "min_price_ticks": 1, "max_price_ticks": 100000000, "max_order_quantity": 1000000 }
+  ]
+}

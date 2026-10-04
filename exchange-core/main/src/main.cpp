@@ -22,6 +22,7 @@
 #include "lockstep/app/fatal.hpp"
 #include "lockstep/app/ports/clock.hpp"
 #include "lockstep/app/router.hpp"
+#include "lockstep/config/exchange_config.hpp"
 #include "lockstep/domain/shard_engine.hpp"
 #include "lockstep/grpc/order_entry_service.hpp"
 #include "lockstep/grpc/server.hpp"
@@ -78,17 +79,39 @@ sigset_t block_shutdown_signals() {
     return signals;
 }
 
-int run(const main_app::Options& options) {
-    const sigset_t signals = block_shutdown_signals();
-
-    app::SystemClock clock;
-    app::EngineConfig config{
+/// Builds the engine configuration from either the JSON config file (ADR-0019)
+/// or, when none is given, the individual flags with their defaults. The two
+/// are mutually exclusive, enforced in parse_options.
+std::expected<app::EngineConfig, std::string> build_engine_config(
+    const main_app::Options& options) {
+    if (!options.config_file.empty()) {
+        auto config = config::load_config(options.config_file);
+        if (!config) {
+            return std::unexpected(std::move(config).error());
+        }
+        return app::EngineConfig{.instruments = std::move(config->instruments),
+                                 .shard_count = config->shards,
+                                 .risk_link_policy = config->risk_link_policy};
+    }
+    return app::EngineConfig{
         .instruments = options.instruments | std::views::transform([](std::uint32_t id) {
                            return domain::InstrumentSpec{.id = domain::InstrumentId{id}};
                        }) |
                        std::ranges::to<std::vector>(),
         .shard_count = options.shards,
     };
+}
+
+int run(const main_app::Options& options) {
+    const sigset_t signals = block_shutdown_signals();
+
+    app::SystemClock clock;
+    auto engine_config = build_engine_config(options);
+    if (!engine_config) {
+        // Startup error (bad config file); surfaced like any other (ADR-0008).
+        throw std::runtime_error("config: " + engine_config.error());
+    }
+    app::EngineConfig config{std::move(*engine_config)};
     // One journal file per shard (ADR-0004). The header records the shard's
     // config so replay can refuse a journal recorded under another one
     // (ADR-0012, ADR-0017). The Engine builds its own Router from the same
@@ -127,6 +150,10 @@ int run(const main_app::Options& options) {
                                 .config_hash = journal::config_hash(shard_config)},
             sync);
     };
+    // Captured before the Engine moves `config` out from under us, for the
+    // startup log line (the config file may differ from the --shards flag).
+    const std::size_t shard_count_for_log = config.shard_count;
+    const std::size_t instrument_count_for_log = config.instruments.size();
     app::Engine engine{std::move(config), std::move(journal_factory), clock};
     support::info("journal: writing {} (fsync={})", options.journal_dir.string(),
                   options.fsync_every_commit ? "commit" : "none");
@@ -149,7 +176,7 @@ int run(const main_app::Options& options) {
         risk->start();
     }
     support::info("exchange-core listening on port {} (shards={}, instruments={})", server.port(),
-                  options.shards, options.instruments.size());
+                  shard_count_for_log, instrument_count_for_log);
 
     int signal = 0;
     sigwait(&signals, &signal);

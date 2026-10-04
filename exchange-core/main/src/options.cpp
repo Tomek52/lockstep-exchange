@@ -37,6 +37,8 @@ std::expected<std::vector<std::uint32_t>, std::string> parse_instruments(std::st
 
 std::expected<Options, std::string> parse_options(std::span<char* const> args) {
     Options options;
+    bool instruments_given = false;
+    bool config_given = false;
     for (const std::string_view arg : args | std::views::drop(1)) {
         const auto eq = arg.find('=');
         const std::string_view key = arg.substr(0, eq);
@@ -65,6 +67,13 @@ std::expected<Options, std::string> parse_options(std::span<char* const> args) {
                 return std::unexpected(ids.error());
             }
             options.instruments = std::move(*ids);
+            instruments_given = true;
+        } else if (key == "--config") {
+            if (value.empty()) {
+                return std::unexpected(std::string{"--config: a file path is required"});
+            }
+            options.config_file = value;
+            config_given = true;
         } else if (key == "--journal-dir") {
             if (value.empty()) {
                 return std::unexpected(std::string{"--journal-dir: a directory is required"});
@@ -79,6 +88,12 @@ std::expected<Options, std::string> parse_options(std::span<char* const> args) {
         } else {
             return std::unexpected("unknown option '" + std::string{arg} + "'");
         }
+    }
+    // One source of instruments at a time: --config describes the full
+    // instrument set (and shards and risk policy), so combining it with the
+    // legacy --instruments list is ambiguous (ADR-0019).
+    if (config_given && instruments_given) {
+        return std::unexpected(std::string{"--config and --instruments are mutually exclusive"});
     }
     return options;
 }

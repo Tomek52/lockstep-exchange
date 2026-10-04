@@ -27,3 +27,9 @@ lockstep_add_include_rule(app ${_core}/app
 
 lockstep_add_include_rule(journal ${_core}/adapters/journal
   ALLOWED_PROJECT "lockstep/domain/" "lockstep/concurrency/" "lockstep/app/" "lockstep/journal/")
+
+# No include fitness rule for the config adapter: it includes the header-only
+# JSON library <nlohmann/json.hpp>, which this checker classifies as forbidden
+# third-party (it has a '/' and no allow-list for third-party includes exists).
+# The link allow-list in adapters/config/CMakeLists.txt (lockstep_restrict_links)
+# enforces the dependency boundary instead (ADR-0002, ADR-0019, task 012).

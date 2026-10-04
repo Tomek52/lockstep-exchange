@@ -19,6 +19,10 @@ struct Options {
     bool risk_enabled{true};
     std::filesystem::path journal_dir{"journal"};
     bool fsync_every_commit{true};
+    // A configuration file (ADR-0019). When set, it is the single source of
+    // instruments, shard count and risk link policy; passing it together with
+    // --instruments is an error. Empty means "use the flags above".
+    std::filesystem::path config_file;
     bool help{false};
 };
 
@@ -29,6 +33,7 @@ inline constexpr const char* usage = R"(usage: exchange-core [options]
   --exchange-id=ID            identity sent in the risk handshake  (default exchange-core-1)
   --shards=N                  number of shard threads              (default 2)
   --instruments=ID,ID,...     instrument ids to list               (default 1,2,3,4)
+  --config=FILE               JSON config of instruments/shards    (excludes --instruments)
   --journal-dir=DIR           directory for shard-<id>.jnl files   (default ./journal)
   --fsync=none|commit         fdatasync journal on every commit    (default commit)
   --help)";

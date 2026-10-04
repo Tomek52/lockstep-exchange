@@ -27,8 +27,13 @@ services:
     command:
       - --listen=0.0.0.0:50051
       - --risk-sentinel=risk-sentinel:50052
-      - --shards=2
-      - --instruments=1,2,3,4
+      - --config=/etc/lockstep/exchange.json
+    volumes:
+      # Instrument reference data and engine settings (ADR-0019). Mounted
+      # read-only rather than baked in, so operators can edit it without a
+      # rebuild. --config supplies shards and instruments, so those flags are
+      # dropped here (they are mutually exclusive).
+      - ../config/exchange.json:/etc/lockstep/exchange.json:ro
     ports:
       - "50051:50051"
     depends_on:

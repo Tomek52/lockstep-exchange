@@ -9,6 +9,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       g++-14 cmake ninja-build ca-certificates \
       libgrpc++-dev libgrpc-dev protobuf-compiler-grpc libprotobuf-dev protobuf-compiler \
+      nlohmann-json3-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

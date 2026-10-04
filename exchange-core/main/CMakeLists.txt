@@ -6,6 +6,7 @@ add_executable(exchange-core
 target_link_libraries(exchange-core PRIVATE
   lockstep::app
   lockstep::journal
+  lockstep::config
   lockstep::adapter_grpc
   lockstep::adapter_risk
   lockstep::support

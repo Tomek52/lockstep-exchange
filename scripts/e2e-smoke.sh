@@ -8,17 +8,22 @@
 # accepted, exchange-core shuts down cleanly on SIGTERM, and it leaves one
 # journal file per shard (task 008) in a temporary journal directory.
 #
-# Usage: scripts/e2e-smoke.sh [--core-bin PATH] [--rust-bin-dir DIR]
+# Usage: scripts/e2e-smoke.sh [--core-bin PATH] [--rust-bin-dir DIR] [--config FILE]
 #   defaults: build/debug/exchange-core/main/exchange-core, rust/target/debug
+#   --config FILE  start exchange-core from a JSON config (ADR-0019) instead of
+#                  the --shards/--instruments flags; the file must describe the
+#                  same 2 shards and instruments 1-4 for the journal assertion.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 core_bin="${repo_root}/build/debug/exchange-core/main/exchange-core"
 rust_bin_dir="${repo_root}/rust/target/debug"
+config_file=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --core-bin) core_bin="$2"; shift 2 ;;
     --rust-bin-dir) rust_bin_dir="$2"; shift 2 ;;
+    --config) config_file="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -65,8 +70,16 @@ sentinel_pid=$!
 wait_for_log "${logs}/sentinel.log" "risk-sentinel listening" "sentinel to listen"
 
 echo "==> starting exchange-core on :${core_port}"
+# --config supplies shards and instruments (ADR-0019); otherwise fall back to
+# the equivalent flags. Both paths describe 2 shards and instruments 1-4.
+if [[ -n "${config_file}" ]]; then
+  echo "    using config file: ${config_file}"
+  core_instrument_args=(--config="${config_file}")
+else
+  core_instrument_args=(--shards=2 --instruments=1,2,3,4)
+fi
 "${core_bin}" --listen="127.0.0.1:${core_port}" --risk-sentinel="127.0.0.1:${sentinel_port}" \
-  --shards=2 --instruments=1,2,3,4 --journal-dir="${journal_dir}" >"${logs}/core.log" 2>&1 &
+  "${core_instrument_args[@]}" --journal-dir="${journal_dir}" >"${logs}/core.log" 2>&1 &
 core_pid=$!
 wait_for_log "${logs}/core.log" "exchange-core listening" "exchange-core to listen"
 
