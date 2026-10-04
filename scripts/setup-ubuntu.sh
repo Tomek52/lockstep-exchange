@@ -37,7 +37,7 @@ $SUDO apt-get install -y -qq --no-install-recommends \
   clang-19 clang-tidy-19 clang-format-19 lld-19 llvm-19 libclang-rt-19-dev \
   cmake ninja-build ccache pkg-config git curl ca-certificates unzip jq python3 \
   libgrpc++-dev libgrpc-dev protobuf-compiler-grpc libprotobuf-dev protobuf-compiler \
-  libgtest-dev libgmock-dev libbenchmark-dev
+  libgtest-dev libgmock-dev libbenchmark-dev nlohmann-json3-dev
 
 echo "==> sanitizer-friendly ASLR"
 # Kernels >= 6.5 default to vm.mmap_rnd_bits=32, which makes TSan (and at times
