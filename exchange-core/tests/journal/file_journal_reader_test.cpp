@@ -388,6 +388,26 @@ TEST_F(FileJournalReaderTest, PayloadLengthAboveTheMaximumIsCorruptEvenWhenItRun
     EXPECT_EQ(recover_tail(path()), std::unexpected(JournalError::Corrupt));
 }
 
+TEST_F(FileJournalReaderTest, MaximumPayloadLengthRunningPastEofIsATornTail) {
+    // max_payload_size itself is a legal length, so a record claiming it that
+    // ends early is a torn write, not corruption.
+    write_journal(3);
+    auto bytes = read_bytes();
+    const auto record_header = encode(RecordHeader{max_payload_size, 0});
+    bytes.insert(bytes.end(), record_header.begin(), record_header.end());
+    bytes.resize(bytes.size() + 16, std::byte{0x5a});
+    write_bytes(bytes);
+
+    const ReadResult result = read_all(path());
+
+    EXPECT_EQ(result.commands, commands_0_to(3));
+    EXPECT_EQ(result.error, JournalError::Truncated);
+    EXPECT_EQ(parse_record(std::span{bytes}.subspan(record_offset(3))),
+              std::unexpected(JournalError::Truncated));
+    EXPECT_EQ(recover_tail(path()), 3U);
+    EXPECT_EQ(fs::file_size(path()), record_offset(3));
+}
+
 TEST_F(FileJournalReaderTest, ZeroFilledTailIsCorrupt) {
     // What a crash on a filesystem that extends files before writing can leave.
     write_journal(3);
