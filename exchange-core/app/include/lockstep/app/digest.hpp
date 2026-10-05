@@ -72,10 +72,12 @@ private:
 /// agree over identical inputs - this is what `lockstep-replay` prints and
 /// what a live run's DigestBuilder above is built to match exactly.
 ///
-/// Implemented on top of DigestBuilder (adds every event, then every reply,
-/// then finishes with `books`), so a file-based replay (this function) and a
-/// live run's incremental digest cannot diverge through separately
-/// maintained folding logic.
+/// Implemented on top of DigestBuilder, adding events and replies
+/// interleaved per command - this command's events, then its reply, before
+/// the next command's, matching a live run's own fold order (task 010
+/// review F1) - then finishing with `books`, so a file-based replay (this
+/// function) and a live run's incremental digest cannot diverge through
+/// separately maintained folding logic.
 [[nodiscard]] std::uint64_t digest(const ReplayOutput& output,
                                    std::span<const domain::BookSnapshot> books);
 
