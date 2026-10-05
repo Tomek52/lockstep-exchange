@@ -7,6 +7,7 @@
 #include <memory>
 #include <ranges>
 #include <stop_token>
+#include <utility>
 #include <vector>
 
 #include "lockstep/app/messages.hpp"
@@ -77,9 +78,12 @@ public:
                                      const domain::SequencedCommand&>
     void resume_from_journal(Commands&& commands) {
         domain::EventBuffer scratch;
-        for (const domain::SequencedCommand& command : commands) {
+        for (const domain::SequencedCommand& command : std::forward<Commands>(commands)) {
             scratch.clear();
-            (void)engine_.apply(command, scratch);
+            // Discarded on purpose: this command's outcome already reached
+            // its recipient in the run that produced it (see this method's
+            // comment); only the engine's resulting state matters here.
+            [[maybe_unused]] const domain::CommandResult result = engine_.apply(command, scratch);
             sequence_ = command.sequence.value();
         }
     }

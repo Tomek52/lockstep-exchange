@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <ranges>
+#include <utility>
 #include <vector>
 
 #include "lockstep/app/messages.hpp"
@@ -29,7 +30,7 @@ template <std::ranges::input_range Commands>
 [[nodiscard]] ReplayOutput replay(domain::ShardEngine& engine, Commands&& commands) {
     ReplayOutput output;
     domain::EventBuffer buffer;
-    for (const domain::SequencedCommand& command : commands) {
+    for (const domain::SequencedCommand& command : std::forward<Commands>(commands)) {
         buffer.clear();
         const domain::CommandResult result = engine.apply(command, buffer);
         for (const domain::Event& event : buffer.events()) {
