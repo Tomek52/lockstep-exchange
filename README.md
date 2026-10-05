@@ -106,11 +106,13 @@ build/debug/exchange-core/main/exchange-core --listen=127.0.0.1:50051 --risk-sen
 rust/target/debug/loadgen --target http://127.0.0.1:50051 --count 100 --instrument 2
 ```
 
-Journal files are created with `O_EXCL`, so restarting with the same
-`--journal-dir` (including `docker compose stop` followed by `start`) fails
-until the exchange can resume from a recovered journal (task 010); remove the
-directory or pass a fresh `--journal-dir` first. To inspect a journal, run
-`build/debug/exchange-core/main/journal-dump <dir>/shard-0.jnl`.
+Restarting with the same `--journal-dir` (including `docker compose stop`
+followed by `start`) recovers and resumes each shard's existing journal
+(ADR-0020, task 010) instead of failing on `O_EXCL`; a journal `recover_tail`
+cannot safely repair stops startup naming the file instead. To inspect a
+journal, run `build/debug/exchange-core/main/journal-dump <dir>/shard-0.jnl`,
+or `build/debug/exchange-core/main/lockstep-replay --journal-dir=<dir>
+--shards=N --instruments=...` for a per-shard digest of the whole directory.
 
 ## Repository layout
 
@@ -145,8 +147,8 @@ ROADMAP.md                milestones → task specs
 | Runtime: shards + publisher on `std::jthread`, write-ahead ordering, lossless shutdown | ✅ lock-free SPSC egress ([task 005](docs/tasks/005-spsc-queue.md)) and MPSC ingress ([task 006](docs/tasks/006-mpsc-queue.md)); threads park on a `Doorbell` instead of polling, with runtime stats exposed ([task 007](docs/tasks/007-runtime-idle-and-stats.md)); runtime subscriptions with filtering and a slow-consumer policy ([task 011](docs/tasks/011-publisher-fanout.md)) |
 | Order entry over gRPC, end to end | ✅ |
 | Risk session handshake + inbound risk commands | ✅ (reports, acks, reconnect: task 014) |
-| Write-ahead journal on disk: one file per shard, CRC32C-checked records, `--journal-dir`, `--fsync=none\|commit` | ✅ writer ([task 008](docs/tasks/008-journal-writer.md)); lazy `std::generator` reader, torn-tail recovery, `journal-dump` and a decoder fuzzer ([task 009](docs/tasks/009-journal-reader.md)); resuming from a journal: task 010 |
-| Deterministic replay test (live vs replay, in memory) | ✅ (file-based replay: task 010) |
+| Write-ahead journal on disk: one file per shard, CRC32C-checked records, `--journal-dir`, `--fsync=none\|commit` | ✅ writer ([task 008](docs/tasks/008-journal-writer.md)); lazy `std::generator` reader, torn-tail recovery, `journal-dump` and a decoder fuzzer ([task 009](docs/tasks/009-journal-reader.md)); recover/replay/resume a restart and a `lockstep-replay` digest tool ([task 010](docs/tasks/010-deterministic-replay.md), [ADR-0020](docs/adr/0020-journal-restart-recover-replay-resume.md)) |
+| Deterministic replay test (live vs replay, in memory and on disk, crash recovery, restart) | ✅ ([task 010](docs/tasks/010-deterministic-replay.md)) |
 | Market data stream | ⏳ task 013 |
 | risk-sentinel position/limit engine | ✅ pure positions, PnL and limits ([task 015](docs/tasks/015-sentinel-positions-pnl.md)); Monitor session logic ⏳ task 016 |
 
