@@ -214,6 +214,22 @@ int run(const main_app::Options& options) {
     }
 
     engine.start();
+    // Every shard's risk link starts this run disconnected, journaled as an
+    // explicit command rather than assumed (ADR-0004, ADR-0020 review F2):
+    // a restart's resumed state can end with RiskLinkStatus{connected=true}
+    // from the previous run (it was up when the process died), and under
+    // FailClosed that stale "connected" would silently let new orders
+    // through with no live risk link. Broadcasting here, after start() but
+    // before anything can reach the engine from outside (the gRPC server
+    // and the risk client both start later), makes this always the first
+    // live command every shard processes - deterministic and unconditional,
+    // not only on a restart, so a fresh start's journal looks the same
+    // shape as a resumed one. RiskLinkStatus is idempotent
+    // (RiskState::set_link_connected) and a fresh ShardEngine already
+    // starts disconnected, so this is a no-op there, not a new behaviour.
+    if (!engine.broadcast(domain::RiskLinkStatus{.connected = false})) {
+        throw std::runtime_error("startup: could not journal the initial RiskLinkStatus");
+    }
     grpc_adapter::OrderEntryService order_entry{engine};
     grpc_adapter::GrpcServer server{options.listen, {&order_entry}};
     if (risk) {

@@ -80,7 +80,8 @@ std::unique_ptr<FileJournalWriter> FileJournalWriter::create(const std::filesyst
                                                              SyncPolicy policy) {
     const std::filesystem::path path = dir / file_name(header.shard);
     // O_EXCL: never truncate or append to an existing journal. Reopening one
-    // needs recover_tail() of a possibly torn tail first (resuming is task 010).
+    // for a restart goes through recover_tail() and open_for_append() below
+    // instead (ADR-0020).
     // Owner-only: the journal holds every trader's order flow.
     constexpr mode_t file_mode = S_IRUSR | S_IWUSR;
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open(2) is variadic by POSIX
@@ -114,10 +115,14 @@ std::unique_ptr<FileJournalWriter> FileJournalWriter::open_for_append(
     const std::filesystem::path& dir, domain::ShardId shard, SyncPolicy policy) {
     const std::filesystem::path path = dir / file_name(shard);
     // O_APPEND: every write(2) atomically seeks to the current end of file
-    // first, so this writer never needs to track or restore a byte offset,
-    // and cannot clobber the recovered tail even if something else sized the
-    // file between recover_tail() and this open. No O_CREAT/O_EXCL: resuming
-    // an existing, already-recovered file (ADR-0020), never creating one.
+    // first, so this writer never needs to track or restore a byte offset
+    // itself. It does not protect the bytes recover_tail() already
+    // validated from some other process truncating or writing to the file
+    // between that call and this one - recover_for_restart()'s precondition
+    // ("must not run while a writer or another recoverer has the file
+    // open") is what rules that out, not this flag. No O_CREAT/O_EXCL:
+    // resuming an existing, already-recovered file (ADR-0020), never
+    // creating one.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open(2) is variadic by POSIX
     const int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
     if (fd < 0) {

@@ -50,6 +50,9 @@ TEST(Resume, ReplaysRecordsBeforeStartAndContinuesSequenceAndOrderIds) {
     ASSERT_NE(book, nullptr);
     EXPECT_EQ(book->order_count(), 1U);
     EXPECT_EQ(book->best_price(Side::Buy), Price{50});
+    const RestingOrder* resumed = book->front(Side::Buy);
+    ASSERT_NE(resumed, nullptr);
+    const OrderId resumed_order_id = resumed->id;
 
     engine.add_subscriber(subscriber);
     engine.start();
@@ -69,11 +72,9 @@ TEST(Resume, ReplaysRecordsBeforeStartAndContinuesSequenceAndOrderIds) {
     EXPECT_EQ(ack.sequence, SequenceNumber{2})
         << "sequence numbering must resume after the replayed record, not restart at 1";
     // Order ids are a per-shard counter (ShardEngine::next_order_id): the
-    // resumed order must have consumed the first one.
-    const OrderId resumed_order =
-        book->find(ack.result->order_id) != nullptr ? ack.result->order_id : OrderId{0};
-    (void)resumed_order;  // the id itself is opaque; what matters is it differs below
-    EXPECT_NE(ack.result->order_id, OrderId{0});
+    // resumed order must have consumed the first one, so this new order's
+    // id must be strictly greater.
+    EXPECT_GT(ack.result->order_id.value(), resumed_order_id.value());
 
     // The replayed command's own events (its OrderAccepted and
     // BookLevelChanged) must never have been published: only this run's new
@@ -84,6 +85,47 @@ TEST(Resume, ReplaysRecordsBeforeStartAndContinuesSequenceAndOrderIds) {
             EXPECT_EQ(accepted->trader, TraderId{2});
         }
     }
+}
+
+// Task 010 review F2: a crash can leave the journal's last known risk-link
+// state as "connected" (the link was up when the process died). Resuming
+// that state naively and then accepting traffic would let FailClosed treat
+// the link as still up with nothing actually connected. ADR-0020's fix is
+// that the composition root journals RiskLinkStatus{connected=false} as
+// this run's first live command, overriding the stale resumed state before
+// anything can submit an order; this test exercises exactly that sequence
+// at the Engine level (main.cpp does the same broadcast call after start()).
+TEST(Resume, RestartWithFailClosedRejectsOrdersUntilTheLinkReconnects) {
+    ManualClock clock{1'000, 10};
+    test::MemoryJournals journals;
+
+    // Simulates a journal whose last record was a stale "connected" - as if
+    // the previous run's risk client had reconnected before the crash.
+    ResumeFactory resume = [](ShardId shard) -> std::vector<SequencedCommand> {
+        if (shard != ShardId{0}) {
+            return {};
+        }
+        return {
+            SequencedCommand{SequenceNumber{1}, Timestamp{900}, RiskLinkStatus{.connected = true}}};
+    };
+    Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}},
+                               .shard_count = 1,
+                               .risk_link_policy = RiskLinkPolicy::FailClosed},
+                  journals.factory(), clock, std::move(resume)};
+    engine.start();
+    ASSERT_TRUE(engine.broadcast(RiskLinkStatus{.connected = false}).has_value());
+
+    auto [completion, reply] = test::reply_future();
+    ASSERT_TRUE(engine
+                    .submit(buy(TraderId{1}, ClientOrderId{1}, InstrumentId{1}, Price{50}),
+                            std::move(completion))
+                    .has_value());
+    ASSERT_EQ(reply.wait_for(test::reply_timeout), std::future_status::ready);
+    const CommandReply ack = reply.get();
+    engine.stop();
+
+    ASSERT_FALSE(ack.result.has_value());
+    EXPECT_EQ(ack.result.error(), RejectReason::RiskUnavailable);
 }
 
 TEST(Resume, EmptyResumeFactoryBehavesLikeAFreshShard) {

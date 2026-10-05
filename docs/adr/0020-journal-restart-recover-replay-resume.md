@@ -26,11 +26,13 @@ On startup, for each shard journal that already exists in `--journal-dir`:
 1. Run `recover_tail` on it. This cuts a torn tail (a crash mid-write) to the
    last complete, CRC-valid record; it never touches a file it refuses.
 2. If `recover_tail` refuses the file (`JournalError::Corrupt` - including a
-   zero-filled tail, which a crash under `--fsync=none` can leave, since
-   zero bytes decode as a record header of length zero with a CRC that
-   almost never matches - or `VersionMismatch`/`IoFailure`), **startup fails**
-   with a message naming the file. The file is never deleted or truncated
-   automatically; recovering it is an operator decision.
+   zero-filled tail, which a crash under `--fsync=none` can leave: the
+   record header's `payload_size`/`crc32c` fields read as zero, and
+   CRC32C of an empty payload is itself zero, so the header's own check
+   passes; `decode_payload` is what refuses it, since zero bytes can never
+   decode to a real command - or `VersionMismatch`/`IoFailure`), **startup
+   fails** with a message naming the file. The file is never deleted or
+   truncated automatically; recovering it is an operator decision.
 3. Re-read the recovered file with `ReaderExpectations` set to this run's
    shard id, shard count and `config_hash` (ADR-0017). A mismatch
    (`JournalError::ConfigMismatch`) also fails startup naming the file: the
@@ -44,22 +46,56 @@ On startup, for each shard journal that already exists in `--journal-dir`:
    events and replies already reached their original recipients during the
    run that produced them.
 5. Reopen the same file for appending (`O_APPEND`, no `O_EXCL`; new journals
-   still use `O_EXCL` + mode `0600` to create) and continue the sequence
-   numbering from the last recovered record's sequence number.
+   still use `O_EXCL` + mode `0600` to create). `open_for_append` does not
+   re-check the file's permission bits: verifying them needs `fstat`
+   (`<sys/stat.h>`), which the journal adapter's architecture rule
+   (ADR-0002) does not let it include (that header has a `/` in its name,
+   which this layer's fitness function treats the same as any other
+   third-party header). A file this reopens keeps whatever mode it already
+   has, including one changed outside the exchange after `create()` made it
+   owner-only; `open_for_append`'s doc comment says so. Continue the
+   sequence numbering from the last recovered record's sequence number.
+6. Before accepting any traffic from outside (gRPC order entry, the risk
+   link), broadcast `RiskLinkStatus{connected=false}` to every shard as this
+   run's own first live command, journaled like any other. A crash can leave
+   the recovered state's last known link status as `connected=true` - the
+   link really was up when the process died - and resuming that naively
+   would let `RiskLinkPolicy::FailClosed` treat the link as live with
+   nothing actually connected on this run. This is unconditional (a fresh
+   start journals it too, harmlessly: `RiskState::set_link_connected` is
+   idempotent, and a fresh `ShardEngine` already starts disconnected), so a
+   fresh start's journal has the same shape as a resumed one, and the
+   decision does not depend on inspecting the resumed state first.
 
 A journal directory with no existing file for a shard is unaffected: that
 shard starts exactly as it does today (`FileJournalWriter::create`).
 
 **Digest on exit.** `--print-digest-on-exit` must report the digest of the
 *whole* journal - the state rebuilt from any pre-existing records plus this
-run's own - not just what this run appended, so that it always equals
-`lockstep-replay` run afterwards over the same directory. The simplest way to
-guarantee that equality is to compute it the same way `lockstep-replay` does:
-re-read each shard's committed file from disk at shutdown and replay it into
-a fresh `ShardEngine`, rather than accumulate a running digest from the live
-run's in-memory outputs (which would have to separately account for the
-replayed-at-startup outputs that step 4 deliberately does not publish, and
-could drift from the on-disk bytes if the two code paths diverged).
+run's own - not just what this run appended, so that it always equals a
+`lockstep-replay` run afterwards over the same directory. The first version
+of this decision computed it by re-reading each shard's committed file from
+disk at shutdown, the same way `lockstep-replay` does. Review (task 010)
+rejected that: a mutant that passed a no-op resume factory (silently
+skipping step 4 entirely) still passed `scripts/e2e-smoke.sh`, because
+re-reading from disk makes the check a replay-equals-replay tautology - it
+cannot catch a bug in how, or whether, the live run itself produced that
+state in the first place.
+
+The fix is `app::DigestBuilder`: each shard's `ShardRuntime` owns one and
+folds into it incrementally - every record resumed in step 4 (not
+published, but still folded, in file order), then every command the live
+run processes, interleaved per command (that command's events, then its
+reply) in the exact order a from-disk replay would produce them. Only the
+shard thread writes it; `--print-digest-on-exit` reads it only after
+`Engine::stop()` has joined every shard thread, which is what makes the read
+safe without further synchronisation. `app::digest(ReplayOutput, books)` -
+what `lockstep-replay` uses - is implemented on top of the same
+`DigestBuilder`, so the two can never fold their output differently by
+accident; aligning them this way also surfaced and fixed a second bug, where
+`digest()` had folded all events before all replies instead of interleaving
+per command. Memory stays bounded (one running hash and two counters per
+shard, not the growing output vectors a from-disk replay builds).
 
 ## Alternatives considered
 
@@ -81,9 +117,11 @@ could drift from the on-disk bytes if the two code paths diverged).
   whole file before accepting traffic. Bounding this needs snapshots/
   checkpoints, which is out of scope here (a future ADR, also noted in
   task 010).
-- `FileJournalWriter` gains an append-mode open path alongside `create()`;
-  both still enforce owner-only permissions and never truncate existing
-  content.
+- `FileJournalWriter` gains an append-mode open path alongside `create()`.
+  `create()` still enforces owner-only permissions and never truncates
+  existing content; `open_for_append()` never truncates either, but does
+  not re-verify permissions (see step 5) - an operator who wants that
+  checked has to do it themselves, outside the exchange.
 - The restart path and `lockstep-replay` share the same recover/replay
   building blocks (`recover_tail`, `read_journal`, `app::replay`), so a bug
   in one is likely to be caught by the other's tests.

@@ -236,6 +236,26 @@ TEST_F(FileJournalWriterTest, OpenForAppendThrowsWhenFileIsMissing) {
                  std::runtime_error);
 }
 
+// Task 010 review F8: open_for_append does not verify or restore the file's
+// permission bits (the architecture rule for this layer excludes
+// <sys/stat.h>/fstat - see open_for_append's doc comment) - it keeps
+// whatever mode the file already has, even one changed outside the exchange
+// after create() made it owner-only.
+TEST_F(FileJournalWriterTest, OpenForAppendKeepsWhateverModeTheFileAlreadyHas) {
+    {
+        const auto writer = FileJournalWriter::create(dir(), header, SyncPolicy::None);
+    }
+    const auto path = dir() / "shard-1.jnl";
+    ASSERT_EQ(::chmod(path.c_str(), S_IRUSR | S_IWUSR | S_IRGRP), 0);
+
+    const auto writer = FileJournalWriter::open_for_append(dir(), header.shard, SyncPolicy::None);
+    struct stat info{};
+    ASSERT_EQ(::stat(path.c_str(), &info), 0);
+    EXPECT_EQ(info.st_mode & 0777U, static_cast<unsigned>(S_IRUSR | S_IWUSR | S_IRGRP));
+
+    ASSERT_EQ(::chmod(path.c_str(), S_IRUSR | S_IWUSR), 0);
+}
+
 TEST_F(FileJournalWriterTest, RefusesToOverwriteAnExistingJournal) {
     {
         (void)FileJournalWriter::create(dir(), header, SyncPolicy::None);
