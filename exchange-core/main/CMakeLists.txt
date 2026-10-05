@@ -20,8 +20,11 @@ add_executable(journal-dump src/journal_dump.cpp)
 target_link_libraries(journal-dump PRIVATE lockstep::journal lockstep::compile_options)
 
 # Offline tool: replays a journal directory and prints each shard's digest
-# (task 010), sharing shard_digest.cpp with exchange-core's
-# --print-digest-on-exit so the two always agree on the same directory.
+# (task 010). Shares shard_digest.cpp with exchange-core itself, which uses
+# its validate_journal_dir() and format_shard_digest_line() (not
+# compute_shard_digest(): --print-digest-on-exit reads its own live
+# app::DigestBuilder instead, task 010 review M1/F1) so the two still agree
+# on what a journal directory and a digest line look like.
 add_executable(lockstep-replay
   src/replay_main.cpp
   src/options.cpp
