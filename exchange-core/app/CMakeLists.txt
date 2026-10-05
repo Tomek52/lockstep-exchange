@@ -1,6 +1,7 @@
 # Application layer: ports (interfaces the adapters implement or call) and the
 # threaded runtime that drives the domain. No gRPC, no protobuf, no files.
 add_library(lockstep_app STATIC
+  src/digest.cpp
   src/engine.cpp
   src/fatal.cpp
   src/publisher.cpp
