@@ -146,6 +146,8 @@ TEST_F(DigestStabilityTest, ChangingOneCommandInACopyChangesTheDigest) {
 
         std::vector<std::byte> payload(header.payload_size);
         file.seekg(static_cast<std::streamoff>(payload_offset));
+        // std::fstream::read only takes char*; std::byte* -> char* is a
+        // standard-layout reinterpret, not a type pun.
         file.read(reinterpret_cast<char*>(payload.data()),  // NOLINT(*-reinterpret-cast)
                   static_cast<std::streamsize>(payload.size()));
         payload.back() = static_cast<std::byte>(~std::to_integer<unsigned char>(payload.back()));
