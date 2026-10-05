@@ -18,6 +18,8 @@ std::expected<T, std::string> parse_number(std::string_view text, std::string_vi
     return value;
 }
 
+}  // namespace
+
 std::expected<std::vector<std::uint32_t>, std::string> parse_instruments(std::string_view text) {
     std::vector<std::uint32_t> ids;
     for (const auto part : text | std::views::split(',')) {
@@ -32,8 +34,6 @@ std::expected<std::vector<std::uint32_t>, std::string> parse_instruments(std::st
     }
     return ids;
 }
-
-}  // namespace
 
 std::expected<Options, std::string> parse_options(std::span<char* const> args) {
     Options options;
@@ -80,6 +80,10 @@ std::expected<Options, std::string> parse_options(std::span<char* const> args) {
             }
             options.journal_dir = value;
         } else if (key == "--print-digest-on-exit") {
+            if (!value.empty()) {
+                return std::unexpected(std::string{"--print-digest-on-exit takes no value, got '"} +
+                                       std::string{value} + "'");
+            }
             options.print_digest_on_exit = true;
         } else if (key == "--fsync") {
             if (value != "none" && value != "commit") {

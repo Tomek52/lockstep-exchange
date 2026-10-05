@@ -24,7 +24,6 @@
 #include "lockstep/app/ports/clock.hpp"
 #include "lockstep/app/router.hpp"
 #include "lockstep/app/shard_runtime.hpp"
-#include "lockstep/config/exchange_config.hpp"
 #include "lockstep/domain/shard_engine.hpp"
 #include "lockstep/grpc/order_entry_service.hpp"
 #include "lockstep/grpc/server.hpp"
@@ -35,6 +34,7 @@
 #include "lockstep/risk_client/risk_client.hpp"
 #include "lockstep/support/log.hpp"
 
+#include "engine_config.hpp"
 #include "options.hpp"
 #include "shard_digest.hpp"
 #include <pthread.h>
@@ -83,34 +83,12 @@ sigset_t block_shutdown_signals() {
     return signals;
 }
 
-/// Builds the engine configuration from either the JSON config file (ADR-0019)
-/// or, when none is given, the individual flags with their defaults. The two
-/// are mutually exclusive, enforced in parse_options.
-std::expected<app::EngineConfig, std::string> build_engine_config(
-    const main_app::Options& options) {
-    if (!options.config_file.empty()) {
-        auto config = config::load_config(options.config_file);
-        if (!config) {
-            return std::unexpected(std::move(config).error());
-        }
-        return app::EngineConfig{.instruments = std::move(config->instruments),
-                                 .shard_count = config->shards,
-                                 .risk_link_policy = config->risk_link_policy};
-    }
-    return app::EngineConfig{
-        .instruments = options.instruments | std::views::transform([](std::uint32_t id) {
-                           return domain::InstrumentSpec{.id = domain::InstrumentId{id}};
-                       }) |
-                       std::ranges::to<std::vector>(),
-        .shard_count = options.shards,
-    };
-}
-
 int run(const main_app::Options& options) {
     const sigset_t signals = block_shutdown_signals();
 
     app::SystemClock clock;
-    auto engine_config = build_engine_config(options);
+    auto engine_config =
+        main_app::build_engine_config(options.config_file, options.instruments, options.shards);
     if (!engine_config) {
         // Startup error (bad config file); surfaced like any other (ADR-0008).
         throw std::runtime_error("config: " + engine_config.error());

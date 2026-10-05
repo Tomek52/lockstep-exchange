@@ -110,8 +110,8 @@ std::expected<void, std::string> validate_journal_dir(const std::filesystem::pat
         if (!filename.starts_with(prefix) || !filename.ends_with(suffix)) {
             continue;  // not a journal file; not this function's concern
         }
-        const std::string_view digits{filename.data() + prefix.size(),
-                                      filename.size() - prefix.size() - suffix.size()};
+        const std::string_view digits = std::string_view{filename}.substr(
+            prefix.size(), filename.size() - prefix.size() - suffix.size());
         std::uint32_t id{};
         const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), id);
         if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size()) {

@@ -238,7 +238,7 @@ std::uint64_t digest_book(std::uint64_t hash, const domain::BookSnapshot& book) 
 
 DigestBuilder::DigestBuilder() noexcept : hash_{fnv1a_offset_basis} {}
 
-void DigestBuilder::add(const PublishedEvent& event) noexcept {
+void DigestBuilder::add(const PublishedEvent& event) {
     hash_ = digest_published_event(hash_, event);
     ++event_count_;
 }

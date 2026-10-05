@@ -31,10 +31,11 @@
 
 #include "lockstep/app/engine.hpp"
 #include "lockstep/app/router.hpp"
-#include "lockstep/config/exchange_config.hpp"
 #include "lockstep/domain/risk_state.hpp"
 #include "lockstep/domain/types.hpp"
 
+#include "engine_config.hpp"
+#include "options.hpp"
 #include "shard_digest.hpp"
 
 namespace {
@@ -59,23 +60,6 @@ constexpr const char* usage = R"(usage: lockstep-replay --journal-dir=DIR [optio
   --config=FILE                JSON config of instruments/shards    (excludes --instruments/--shards)
   --help)";
 
-std::expected<std::vector<std::uint32_t>, std::string> parse_instruments(std::string_view text) {
-    std::vector<std::uint32_t> ids;
-    for (const auto part : text | std::views::split(',')) {
-        std::uint32_t id{};
-        const std::string_view token{part};
-        const auto [end, ec] = std::from_chars(token.data(), token.data() + token.size(), id);
-        if (ec != std::errc{} || end != token.data() + token.size()) {
-            return std::unexpected("--instruments: not a number: '" + std::string{token} + "'");
-        }
-        ids.push_back(id);
-    }
-    if (ids.empty()) {
-        return std::unexpected(std::string{"--instruments: at least one id is required"});
-    }
-    return ids;
-}
-
 std::expected<ReplayOptions, std::string> parse_options(std::span<char* const> args) {
     ReplayOptions options;
     bool instruments_given = false;
@@ -96,7 +80,7 @@ std::expected<ReplayOptions, std::string> parse_options(std::span<char* const> a
             options.journal_dir = value;
             journal_dir_given = true;
         } else if (key == "--instruments") {
-            auto ids = parse_instruments(value);
+            auto ids = main_app::parse_instruments(value);
             if (!ids) {
                 return std::unexpected(ids.error());
             }
@@ -131,27 +115,6 @@ std::expected<ReplayOptions, std::string> parse_options(std::span<char* const> a
     return options;
 }
 
-/// Mirrors main.cpp's build_engine_config: either the config file is the
-/// single source of instruments/shards/policy, or the flags (with defaults).
-std::expected<app::EngineConfig, std::string> build_engine_config(const ReplayOptions& options) {
-    if (!options.config_file.empty()) {
-        auto config = config::load_config(options.config_file);
-        if (!config) {
-            return std::unexpected(std::move(config).error());
-        }
-        return app::EngineConfig{.instruments = std::move(config->instruments),
-                                 .shard_count = config->shards,
-                                 .risk_link_policy = config->risk_link_policy};
-    }
-    return app::EngineConfig{
-        .instruments = options.instruments | std::views::transform([](std::uint32_t id) {
-                           return domain::InstrumentSpec{.id = domain::InstrumentId{id}};
-                       }) |
-                       std::ranges::to<std::vector>(),
-        .shard_count = options.shards,
-    };
-}
-
 }  // namespace
 
 int main(int argc, char** argv) try {
@@ -165,7 +128,8 @@ int main(int argc, char** argv) try {
         return EXIT_SUCCESS;
     }
 
-    const auto engine_config = build_engine_config(*options);
+    const auto engine_config =
+        main_app::build_engine_config(options->config_file, options->instruments, options->shards);
     if (!engine_config) {
         std::println(stderr, "lockstep-replay: config: {}", engine_config.error());
         return exit_usage;

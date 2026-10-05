@@ -2,6 +2,7 @@
 add_executable(exchange-core
   src/main.cpp
   src/options.cpp
+  src/engine_config.cpp
   src/shard_digest.cpp)
 
 target_link_libraries(exchange-core PRIVATE
@@ -23,6 +24,8 @@ target_link_libraries(journal-dump PRIVATE lockstep::journal lockstep::compile_o
 # --print-digest-on-exit so the two always agree on the same directory.
 add_executable(lockstep-replay
   src/replay_main.cpp
+  src/options.cpp
+  src/engine_config.cpp
   src/shard_digest.cpp)
 target_link_libraries(lockstep-replay PRIVATE
   lockstep::app

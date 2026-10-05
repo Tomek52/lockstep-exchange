@@ -38,7 +38,12 @@ class DigestBuilder {
 public:
     DigestBuilder() noexcept;
 
-    void add(const PublishedEvent& event) noexcept;
+    // Not noexcept: folding an event dispatches on its variant via
+    // std::visit, which clang-tidy's bugprone-exception-escape treats as
+    // possibly throwing (std::bad_variant_access on a valueless_by_exception
+    // variant) even though Event, trivially copyable, never reaches that
+    // state (see digest.cpp's digest_event, which this calls through).
+    void add(const PublishedEvent& event);
     void add(const CommandReply& reply) noexcept;
 
     /// Folds in the final book state and returns the digest. `books` must be
