@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "lockstep/app/digest.hpp"
 #include "lockstep/app/messages.hpp"
 #include "lockstep/app/ports/clock.hpp"
 #include "lockstep/app/ports/journal.hpp"
@@ -80,10 +81,17 @@ public:
         domain::EventBuffer scratch;
         for (const domain::SequencedCommand& command : std::forward<Commands>(commands)) {
             scratch.clear();
-            // Discarded on purpose: this command's outcome already reached
-            // its recipient in the run that produced it (see this method's
-            // comment); only the engine's resulting state matters here.
-            [[maybe_unused]] const domain::CommandResult result = engine_.apply(command, scratch);
+            const domain::CommandResult result = engine_.apply(command, scratch);
+            // Not published (see this method's comment), but still folded
+            // into digest_, in file order, exactly as a full-journal replay
+            // would fold them: this is what makes the live digest equal a
+            // lockstep-replay run over the resulting file (task 010 review
+            // F1), including the part of the file this run did not itself
+            // produce.
+            for (const domain::Event& event : scratch.events()) {
+                digest_.add(PublishedEvent{shard(), command.sequence, command.timestamp, event});
+            }
+            digest_.add(CommandReply{shard(), command.sequence, command.timestamp, result});
             sequence_ = command.sequence.value();
         }
     }
@@ -98,6 +106,16 @@ public:
     /// Safe to call from any thread, whether or not the shard thread is
     /// running; see the ShardStats comment.
     [[nodiscard]] ShardStats stats() const noexcept;
+
+    /// Every event and reply this shard has folded so far - every record
+    /// resumed from an existing journal at startup, then every command this
+    /// run has processed, in order (task 010 review F1). Written only by
+    /// the shard thread (resume_from_journal() before run() starts, then
+    /// process() on every command); safe to read from any thread only after
+    /// the shard thread has been joined (Engine::stop()), since joining a
+    /// std::jthread happens-before the joining thread's subsequent reads of
+    /// what that thread wrote - no further synchronisation is needed here.
+    [[nodiscard]] const DigestBuilder& digest_builder() const noexcept { return digest_; }
 
 private:
     std::size_t poll_once();
@@ -121,6 +139,7 @@ private:
     domain::EventBuffer events_;
     std::vector<OutboundItem> staged_;
     std::uint64_t sequence_{0};
+    DigestBuilder digest_;
 
     // Written only by the shard thread; read from any thread via stats().
     std::atomic<std::uint64_t> commands_stat_{0};

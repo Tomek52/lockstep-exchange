@@ -216,13 +216,18 @@ std::uint64_t digest_level(std::uint64_t hash, const domain::LevelView& level) n
     return fnv1a_le(hash, level.order_count);
 }
 
+// Every `.size()` below is explicitly widened to std::uint64_t (brace-init:
+// static_cast<std::uint64_t> is flagged -Wuseless-cast on this toolchain,
+// where std::size_t already is std::uint64_t) so the fold always writes 8
+// bytes regardless of platform, rather than silently narrowing on a 32-bit
+// std::size_t.
 std::uint64_t digest_book(std::uint64_t hash, const domain::BookSnapshot& book) noexcept {
     hash = fnv1a_le(hash, book.instrument.value());
-    hash = fnv1a_le(hash, static_cast<std::uint32_t>(book.bids.size()));
+    hash = fnv1a_le(hash, std::uint64_t{book.bids.size()});
     for (const domain::LevelView& level : book.bids) {
         hash = digest_level(hash, level);
     }
-    hash = fnv1a_le(hash, static_cast<std::uint32_t>(book.asks.size()));
+    hash = fnv1a_le(hash, std::uint64_t{book.asks.size()});
     for (const domain::LevelView& level : book.asks) {
         hash = digest_level(hash, level);
     }
@@ -231,26 +236,69 @@ std::uint64_t digest_book(std::uint64_t hash, const domain::BookSnapshot& book) 
 
 }  // namespace
 
-std::uint64_t digest(const ReplayOutput& output, std::span<const domain::BookSnapshot> books) {
-    std::uint64_t hash = fnv1a_offset_basis;
+DigestBuilder::DigestBuilder() noexcept : hash_{fnv1a_offset_basis} {}
 
-    // Length prefixes before each section: without them, a trailing empty
-    // section and a missing one would hash identically, and two sections
-    // whose boundary moved (e.g. an event list one shorter, a reply list one
-    // longer) could coincidentally hash the same byte stream.
-    hash = fnv1a_le(hash, output.events.size());
-    for (const PublishedEvent& event : output.events) {
-        hash = digest_published_event(hash, event);
-    }
-    hash = fnv1a_le(hash, output.replies.size());
-    for (const CommandReply& reply : output.replies) {
-        hash = digest_reply(hash, reply);
-    }
-    hash = fnv1a_le(hash, books.size());
+void DigestBuilder::add(const PublishedEvent& event) noexcept {
+    hash_ = digest_published_event(hash_, event);
+    ++event_count_;
+}
+
+void DigestBuilder::add(const CommandReply& reply) noexcept {
+    hash_ = digest_reply(hash_, reply);
+    ++reply_count_;
+}
+
+std::uint64_t DigestBuilder::finish(std::span<const domain::BookSnapshot> books) const noexcept {
+    // Counts folded in here, after every item (rather than as length
+    // prefixes before each section): a streaming builder cannot know its
+    // final counts up front. Folding them anywhere deterministic still
+    // tells apart a trailing empty/missing section and a boundary that
+    // moved (e.g. one shard's event list one shorter, its reply list one
+    // longer) - what matters is that every run folds counts at the same
+    // point, which add()/finish() always do.
+    std::uint64_t hash = hash_;
+    hash = fnv1a_le(hash, event_count_);
+    hash = fnv1a_le(hash, reply_count_);
+    hash = fnv1a_le(hash, std::uint64_t{books.size()});
     for (const domain::BookSnapshot& book : books) {
         hash = digest_book(hash, book);
     }
     return hash;
+}
+
+std::uint64_t digest(const ReplayOutput& output, std::span<const domain::BookSnapshot> books) {
+    DigestBuilder builder;
+    // Interleaved per command - this command's events, then its reply,
+    // before the next command's - not all events followed by all replies:
+    // a live run's ShardRuntime folds its DigestBuilder that way (it only
+    // ever has one command's output in hand at a time), and DigestBuilder's
+    // fold is order-sensitive to more than just within-category order, so
+    // matching that interleaving exactly is what makes this function agree
+    // with a live run's digest (task 010 review F1 found this the hard way:
+    // folding all events then all replies gave a different, wrong answer).
+    //
+    // app::replay() guarantees exactly one reply per command in ascending
+    // sequence order, with every event carrying its command's sequence, so
+    // walking the events in lockstep and flushing every event whose
+    // sequence is at or before the next reply's groups each reply with its
+    // own events before moving on. Any events left over after the last
+    // reply (never produced by app::replay(), but this function's input is
+    // a plain struct, not a sealed one) are still folded, in order, at the
+    // end, rather than silently dropped.
+    std::size_t event_index = 0;
+    for (const CommandReply& reply : output.replies) {
+        while (event_index < output.events.size() &&
+               output.events[event_index].sequence.value() <= reply.sequence.value()) {
+            builder.add(output.events[event_index]);
+            ++event_index;
+        }
+        builder.add(reply);
+    }
+    while (event_index < output.events.size()) {
+        builder.add(output.events[event_index]);
+        ++event_index;
+    }
+    return builder.finish(books);
 }
 
 }  // namespace lockstep::app

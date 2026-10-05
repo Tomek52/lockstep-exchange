@@ -18,10 +18,12 @@
 #include <system_error>
 #include <vector>
 
+#include "lockstep/app/digest.hpp"
 #include "lockstep/app/engine.hpp"
 #include "lockstep/app/fatal.hpp"
 #include "lockstep/app/ports/clock.hpp"
 #include "lockstep/app/router.hpp"
+#include "lockstep/app/shard_runtime.hpp"
 #include "lockstep/config/exchange_config.hpp"
 #include "lockstep/domain/shard_engine.hpp"
 #include "lockstep/grpc/order_entry_service.hpp"
@@ -195,7 +197,6 @@ int run(const main_app::Options& options) {
     // config file may differ from the --shards flag).
     const std::size_t shard_count_for_log = config.shard_count;
     const std::size_t instrument_count_for_log = config.instruments.size();
-    const domain::RiskLinkPolicy policy_for_log = config.risk_link_policy;
     app::Engine engine{std::move(config), std::move(journal_factory), clock,
                        std::move(resume_factory)};
     support::info("journal: writing {} (fsync={})", options.journal_dir.string(),
@@ -233,22 +234,35 @@ int run(const main_app::Options& options) {
     engine.stop();
 
     if (options.print_digest_on_exit) {
-        // Re-reads each shard's now fully committed and closed journal file
-        // from disk, the same way lockstep-replay does (shard_digest.hpp),
-        // so this always equals a `lockstep-replay` run over the same
-        // directory afterwards - including any records replayed-but-not-
-        // published at this run's own startup (ADR-0020), which a digest
-        // built only from this run's in-memory outputs would miss.
+        // Computed from this run's own live output (ShardRuntime's
+        // DigestBuilder, folded by each shard thread as it produced events
+        // and replies - including, first, whatever it resumed from an
+        // existing journal at startup), never by re-reading the journal
+        // back from disk: re-reading would make this check a
+        // replay-equals-replay tautology that could not catch a bug in how,
+        // or whether, the live run itself folds its own output into the
+        // digest (task 010 review F1). lockstep-replay is the from-disk
+        // tool; this flag is the live-run oracle it is compared against.
+        //
+        // Book snapshots are taken here, after engine.stop() above joined
+        // every shard thread, so no thread is still touching the engine
+        // (digest_builder()'s own comment states the happens-before this
+        // relies on).
         for (std::uint32_t s = 0; s < shard_count_for_log; ++s) {
             const domain::ShardId shard{s};
-            const auto result = main_app::compute_shard_digest(
-                options.journal_dir, router, shard, static_cast<std::uint32_t>(shard_count_for_log),
-                policy_for_log);
-            if (!result) {
-                support::info("digest: {}", result.error());
-                continue;
+            const app::ShardRuntime& shard_runtime = engine.shard(shard);
+            const app::DigestBuilder& builder = shard_runtime.digest_builder();
+            std::vector<domain::BookSnapshot> books;
+            for (const domain::InstrumentSpec& spec : router.instruments_of(shard)) {
+                if (const domain::OrderBook* book = shard_runtime.engine().book(spec.id)) {
+                    books.push_back(book->snapshot());
+                }
             }
-            std::println("{}", main_app::format_shard_digest_line(result->line));
+            std::println("{}", main_app::format_shard_digest_line(
+                                   main_app::ShardDigestLine{.shard = shard,
+                                                             .commands = builder.commands(),
+                                                             .events = builder.events(),
+                                                             .digest = builder.finish(books)}));
         }
     }
 

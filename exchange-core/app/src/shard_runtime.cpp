@@ -91,12 +91,19 @@ void ShardRuntime::process(InboundCommand inbound) {
     const domain::CommandResult result = engine_.apply(command, events_);
 
     for (const domain::Event& event : events_.events()) {
-        staged_.emplace_back(PublishedEvent{shard(), command.sequence, command.timestamp, event});
+        const PublishedEvent published{shard(), command.sequence, command.timestamp, event};
+        digest_.add(published);
+        staged_.emplace_back(published);
     }
+    // Folded unconditionally, even for a broadcast risk command with no
+    // completion: a full-journal replay (app::replay) produces one reply
+    // per command regardless of who is listening, and the live digest must
+    // match that exactly (task 010 review F1) - only the ReplyTask that
+    // actually reaches a completion is conditional on inbound.completion.
+    const CommandReply reply{shard(), command.sequence, command.timestamp, result};
+    digest_.add(reply);
     if (inbound.completion) {
-        staged_.emplace_back(
-            ReplyTask{std::move(inbound.completion),
-                      CommandReply{shard(), command.sequence, command.timestamp, result}});
+        staged_.emplace_back(ReplyTask{std::move(inbound.completion), reply});
     }
 }
 

@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include "lockstep/app/digest.hpp"
 #include "lockstep/app/replay.hpp"
 #include "lockstep/journal/file_journal_reader.hpp"
 #include "lockstep/journal/file_journal_writer.hpp"
@@ -119,6 +120,77 @@ TEST_F(FileJournalReplayTest, LiveRunReplaysIdenticallyFromDisk) {
             EXPECT_EQ(live_book->snapshot(), replayed_book->snapshot())
                 << "instrument " << spec.id.value();
         }
+    }
+}
+
+// Acceptance criterion 10 (task 010 review F1): a live run's own digest
+// (ShardRuntime's DigestBuilder, folded incrementally as the run produced
+// its output) must equal a from-disk replay's digest of the resulting
+// journal - not by construction (the two are computed by entirely
+// different code paths: one incremental and live, one batch and from
+// app::replay()), which is exactly what would catch a bug in how, or
+// whether, the live path folds its output.
+TEST_F(FileJournalReplayTest, LiveDigestEqualsDiskReplayDigest) {
+    app::ManualClock clock;
+    test::RecordingSubscriber subscriber;
+    std::vector<app::CommandReply> live_replies;
+
+    const app::Router router = app::Router::round_robin(test::instruments(), shard_count);
+    auto journal_factory = [this, &router](ShardId shard) -> std::unique_ptr<app::Journal> {
+        const auto instruments = router.instruments_of(shard);
+        const ShardConfig shard_config{.shard = shard,
+                                       .instruments = {instruments.begin(), instruments.end()}};
+        return journal::FileJournalWriter::create(
+            dir(),
+            journal::FileHeader{.shard = shard,
+                                .shard_count = shard_count,
+                                .config_hash = journal::config_hash(shard_config)},
+            journal::SyncPolicy::None);
+    };
+    app::Engine engine{
+        app::EngineConfig{.instruments = test::instruments(), .shard_count = shard_count},
+        std::move(journal_factory), clock};
+    test::run_workload(engine, subscriber, live_replies, /*producer_count=*/3,
+                       /*commands_per_producer=*/300);
+
+    for (std::uint32_t s = 0; s < shard_count; ++s) {
+        const ShardId shard{s};
+        const auto owned = router.instruments_of(shard);
+        const ShardConfig shard_config{.shard = shard, .instruments = {owned.begin(), owned.end()}};
+
+        // Live: the digest this shard's own ShardRuntime accumulated while
+        // it ran, finished with book snapshots taken after Engine::stop()
+        // joined every shard thread (run_workload() already called stop()).
+        std::vector<BookSnapshot> live_books;
+        for (const InstrumentSpec& spec : owned) {
+            const OrderBook* book = engine.shard(shard).engine().book(spec.id);
+            ASSERT_NE(book, nullptr);
+            live_books.push_back(book->snapshot());
+        }
+        const std::uint64_t live_digest = engine.shard(shard).digest_builder().finish(live_books);
+
+        // From disk: read the journal back and replay it into a fresh
+        // engine, the way lockstep-replay does.
+        const journal::ReaderExpectations expect{.shard = shard,
+                                                 .shard_count = shard_count,
+                                                 .config_hash = journal::config_hash(shard_config)};
+        std::vector<SequencedCommand> commands;
+        for (auto&& record :
+             journal::read_journal(dir() / journal::FileJournalWriter::file_name(shard), expect)) {
+            ASSERT_TRUE(record.has_value()) << app::to_string(record.error());
+            commands.push_back(*record);
+        }
+        ShardEngine fresh{shard_config};
+        const app::ReplayOutput replayed = app::replay(fresh, commands);
+        std::vector<BookSnapshot> replayed_books;
+        for (const InstrumentSpec& spec : owned) {
+            const OrderBook* book = fresh.book(spec.id);
+            ASSERT_NE(book, nullptr);
+            replayed_books.push_back(book->snapshot());
+        }
+        const std::uint64_t replayed_digest = app::digest(replayed, replayed_books);
+
+        EXPECT_EQ(live_digest, replayed_digest) << "shard " << s;
     }
 }
 
