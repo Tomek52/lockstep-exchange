@@ -5,8 +5,11 @@
 #   loadgen (Rust) --SubmitOrder--> exchange-core (C++) --Monitor--> risk-sentinel (Rust)
 #
 # Asserts: sentinel accepts the risk session, every order is acknowledged as
-# accepted, exchange-core shuts down cleanly on SIGTERM, and it leaves one
-# journal file per shard (task 008) in a temporary journal directory.
+# accepted, exchange-core shuts down cleanly on SIGTERM, it leaves one
+# journal file per shard (task 008) in a temporary journal directory, its
+# --print-digest-on-exit output matches a standalone lockstep-replay run over
+# that directory (task 010), and restarting it on the same directory (ADR-0020)
+# works and keeps that property true after more commands.
 #
 # Usage: scripts/e2e-smoke.sh [--core-bin PATH] [--rust-bin-dir DIR] [--config FILE]
 #   defaults: build/debug/exchange-core/main/exchange-core, rust/target/debug
@@ -27,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+replay_bin="$(dirname "${core_bin}")/lockstep-replay"
 
 core_port="${CORE_PORT:-15051}"
 sentinel_port="${SENTINEL_PORT:-15052}"
@@ -59,9 +63,32 @@ wait_for_log() {
   return 1
 }
 
-for bin in "${core_bin}" "${rust_bin_dir}/risk-sentinel" "${rust_bin_dir}/loadgen"; do
+for bin in "${core_bin}" "${replay_bin}" "${rust_bin_dir}/risk-sentinel" "${rust_bin_dir}/loadgen"; do
   [[ -x "${bin}" ]] || { echo "missing binary: ${bin} (build first)" >&2; exit 1; }
 done
+
+# digest_lines_match <core.log> <label>: compares the "shard N: ... digest=..."
+# lines exchange-core printed at shutdown (--print-digest-on-exit) against a
+# fresh `lockstep-replay` run over the same journal directory. Both must use
+# the same instrument -> shard assignment as the running exchange-core.
+digest_lines_match() {
+  local core_log="$1" label="$2"
+  local from_core from_replay
+  from_core="$(grep -E '^shard [0-9]+: ' "${core_log}")"
+  if [[ -n "${config_file}" ]]; then
+    from_replay="$("${replay_bin}" --journal-dir="${journal_dir}" --config="${config_file}")"
+  else
+    from_replay="$("${replay_bin}" --journal-dir="${journal_dir}" --shards=2 --instruments=1,2,3,4)"
+  fi
+  echo "    exchange-core (${label}):"
+  echo "${from_core}" | sed 's/^/      /'
+  echo "    lockstep-replay:"
+  echo "${from_replay}" | sed 's/^/      /'
+  if [[ "${from_core}" != "${from_replay}" ]]; then
+    echo "digest mismatch (${label}): exchange-core vs lockstep-replay" >&2
+    exit 1
+  fi
+}
 
 echo "==> starting risk-sentinel on :${sentinel_port}"
 RUST_LOG=info "${rust_bin_dir}/risk-sentinel" --listen "127.0.0.1:${sentinel_port}" \
@@ -79,7 +106,8 @@ else
   core_instrument_args=(--shards=2 --instruments=1,2,3,4)
 fi
 "${core_bin}" --listen="127.0.0.1:${core_port}" --risk-sentinel="127.0.0.1:${sentinel_port}" \
-  "${core_instrument_args[@]}" --journal-dir="${journal_dir}" >"${logs}/core.log" 2>&1 &
+  "${core_instrument_args[@]}" --journal-dir="${journal_dir}" --print-digest-on-exit \
+  >"${logs}/core.log" 2>&1 &
 core_pid=$!
 wait_for_log "${logs}/core.log" "exchange-core listening" "exchange-core to listen"
 
@@ -110,6 +138,38 @@ if (( $(stat -c %s "${journal_dir}/shard-1.jnl") <= journal_header_size )); then
   echo "shard-1.jnl holds no records" >&2
   exit 1
 fi
+
+echo "==> lockstep-replay digest vs --print-digest-on-exit (first run)"
+digest_lines_match "${logs}/core.log" "first run"
+
+echo "==> restarting exchange-core on the same journal dir (ADR-0020)"
+"${core_bin}" --listen="127.0.0.1:${core_port}" --risk-sentinel="127.0.0.1:${sentinel_port}" \
+  "${core_instrument_args[@]}" --journal-dir="${journal_dir}" --print-digest-on-exit \
+  >"${logs}/core-restart.log" 2>&1 &
+core_pid=$!
+wait_for_log "${logs}/core-restart.log" "exchange-core listening" "restarted exchange-core to listen"
+wait_for_log "${logs}/sentinel.log" "session established" "sentinel to accept the restarted session"
+wait_for_log "${logs}/core-restart.log" "session accepted by sentinel" \
+  "restarted exchange-core to see the accept"
+
+echo "==> submitting more orders after restart"
+# Different --trader than the first run: the first run's orders are still
+# resting (nothing cancelled them), and loadgen reuses the same client order
+# ids on every invocation, so resubmitting as the same trader would hit
+# RejectReason::DuplicateClientOrderId - itself proof the restart kept state,
+# but not what this step is checking.
+"${rust_bin_dir}/loadgen" --target "http://127.0.0.1:${core_port}" \
+  --count 5 --trader 2 --instrument 2 --expect-accepted
+
+echo "==> graceful shutdown (restart)"
+kill -TERM "${core_pid}"
+wait "${core_pid}"
+core_pid=""
+grep -q "exchange-core stopped cleanly" "${logs}/core-restart.log"
+
+echo "==> lockstep-replay digest vs --print-digest-on-exit (after restart)"
+digest_lines_match "${logs}/core-restart.log" "after restart"
+
 kill -TERM "${sentinel_pid}"
 wait "${sentinel_pid}" || true
 sentinel_pid=""
