@@ -16,6 +16,7 @@ std::vector<EgressQueue*> egress_queues(const std::vector<std::unique_ptr<ShardR
 std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& config,
                                                        const Router& router,
                                                        JournalFactory& journal_factory,
+                                                       ResumeFactory& resume_factory,
                                                        Clock& clock,
                                                        concurrency::Doorbell& publisher_doorbell) {
     if (config.shard_count == 0 || config.shard_count > (1U << 16U)) {
@@ -33,17 +34,25 @@ std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& confi
             .ingress_capacity = config.ingress_capacity,
             .egress_capacity = config.egress_capacity,
         };
-        shards.push_back(std::make_unique<ShardRuntime>(
+        auto& shard = shards.emplace_back(std::make_unique<ShardRuntime>(
             std::move(shard_config), journal_factory(id), clock, publisher_doorbell));
+        // Rebuild state recovered from an existing journal before anyone can
+        // observe this shard (ADR-0020): no thread has started yet, and the
+        // owner thread building the Engine is the only one touching it.
+        if (resume_factory) {
+            shard->resume_from_journal(resume_factory(id));
+        }
     }
     return shards;
 }
 
 }  // namespace
 
-Engine::Engine(EngineConfig config, JournalFactory journal_factory, Clock& clock)
+Engine::Engine(EngineConfig config, JournalFactory journal_factory, Clock& clock,
+              ResumeFactory resume_factory)
     : router_{Router::round_robin(config.instruments, config.shard_count)},
-      shards_{make_shards(config, router_, journal_factory, clock, publisher_doorbell_)},
+      shards_{make_shards(config, router_, journal_factory, resume_factory, clock,
+                          publisher_doorbell_)},
       publisher_{egress_queues(shards_), publisher_doorbell_} {}
 
 Engine::~Engine() {

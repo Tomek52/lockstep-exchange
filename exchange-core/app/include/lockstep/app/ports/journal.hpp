@@ -6,6 +6,7 @@
 #include <memory>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "lockstep/domain/commands.hpp"
 #include "lockstep/domain/types.hpp"
@@ -62,5 +63,13 @@ public:
 
 /// Creates the journal for a shard; chosen by the composition root.
 using JournalFactory = std::move_only_function<std::unique_ptr<Journal>(domain::ShardId)>;
+
+/// Records to replay into a shard's engine before its thread starts
+/// (ADR-0020): recovers state from a journal that already held commands, so
+/// order ids, books and the sequence counter continue where they stopped.
+/// Empty (the default-constructed, "falsy" move_only_function) when the
+/// composition root has nothing to resume, in which case Engine skips the
+/// replay step entirely rather than calling it for an empty result.
+using ResumeFactory = std::move_only_function<std::vector<domain::SequencedCommand>(domain::ShardId)>;
 
 }  // namespace lockstep::app

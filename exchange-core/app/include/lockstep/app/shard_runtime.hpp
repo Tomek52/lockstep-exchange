@@ -1,9 +1,11 @@
 #pragma once
 
 #include <atomic>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <ranges>
 #include <stop_token>
 #include <vector>
 
@@ -61,6 +63,26 @@ public:
     /// Rung by Engine::submit/broadcast after a successful push to ingress(),
     /// so this shard's parked thread (if any) wakes to process it.
     [[nodiscard]] concurrency::Doorbell& doorbell() noexcept { return doorbell_; }
+
+    /// Rebuilds state from a journal that already held commands, before the
+    /// shard thread starts (ADR-0020): replays `commands` into the engine
+    /// exactly as the original run did, but discards their events and
+    /// replies - they already reached their recipients in the run that
+    /// produced them, so republishing them would be new (phantom) activity,
+    /// not state rebuild - and resumes sequence numbering after the last
+    /// one. Must be called before run(), from the owner thread only, and at
+    /// most once (it does not clear any state of its own, only engine_'s).
+    template <std::ranges::input_range Commands>
+        requires std::convertible_to<std::ranges::range_reference_t<Commands>,
+                                     const domain::SequencedCommand&>
+    void resume_from_journal(Commands&& commands) {
+        domain::EventBuffer scratch;
+        for (const domain::SequencedCommand& command : commands) {
+            scratch.clear();
+            (void)engine_.apply(command, scratch);
+            sequence_ = command.sequence.value();
+        }
+    }
 
     /// Thread body. Returns after `stop` is requested and ingress is drained.
     /// Precondition for a lossless stop: producers have stopped submitting.

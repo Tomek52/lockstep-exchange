@@ -39,7 +39,12 @@ struct EngineConfig {
 /// completion invoked.
 class Engine final : public CommandIngress {
 public:
-    Engine(EngineConfig config, JournalFactory journal_factory, Clock& clock);
+    /// `resume_factory`, if set, is called once per shard right after its
+    /// journal and before any thread starts, to rebuild state recovered from
+    /// an existing journal (ADR-0020). Left default-constructed ("falsy") for
+    /// a fresh exchange with nothing to resume.
+    Engine(EngineConfig config, JournalFactory journal_factory, Clock& clock,
+          ResumeFactory resume_factory = nullptr);
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
     Engine(Engine&&) = delete;
