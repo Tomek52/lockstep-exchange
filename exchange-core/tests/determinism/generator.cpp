@@ -2,6 +2,10 @@
 
 #include <atomic>
 #include <mutex>
+#include <thread>
+#include <utility>
+
+#include <gtest/gtest.h>
 
 namespace lockstep::test {
 
@@ -25,7 +29,8 @@ std::optional<domain::OrderId> AcceptedOrders::sample(std::mt19937_64& rng) cons
     return ids_[rng() % ids_.size()];
 }
 
-domain::Command random_command(std::mt19937_64& rng, domain::TraderId trader,
+domain::Command random_command(std::mt19937_64& rng,
+                               domain::TraderId trader,
                                AcceptedOrders& accepted) {
     using namespace domain;
 
@@ -67,9 +72,9 @@ domain::Command random_command(std::mt19937_64& rng, domain::TraderId trader,
 
     OrderType type = OrderType::Limit;
     TimeInForce tif = TimeInForce::Gtc;
-    if (roll < 48) {          // ~10%: market order
+    if (roll < 48) {  // ~10%: market order
         type = OrderType::Market;
-    } else if (roll < 58) {   // ~10%: IOC limit order
+    } else if (roll < 58) {  // ~10%: IOC limit order
         tif = TimeInForce::Ioc;
     }
 
@@ -93,13 +98,12 @@ std::atomic<std::uint64_t> next_risk_command_id{1};
 }  // namespace
 
 std::optional<domain::Command> maybe_risk_command(std::mt19937_64& rng,
-                                                   domain::TraderId target_trader) {
+                                                  domain::TraderId target_trader) {
     std::uniform_int_distribution<int> roll{0, risk_command_every - 1};
     if (roll(rng) != 0) {
         return std::nullopt;
     }
-    const domain::RiskCommandId id{
-        next_risk_command_id.fetch_add(1, std::memory_order_relaxed)};
+    const domain::RiskCommandId id{next_risk_command_id.fetch_add(1, std::memory_order_relaxed)};
     std::uniform_int_distribution<int> which{0, 2};
     switch (which(rng)) {
         case 0:
@@ -109,6 +113,65 @@ std::optional<domain::Command> maybe_risk_command(std::mt19937_64& rng,
         default:
             return domain::KillSwitch{.command_id = id, .engaged = rng() % 2 == 0};
     }
+}
+
+void run_workload(app::Engine& engine,
+                  RecordingSubscriber& subscriber,
+                  std::vector<app::CommandReply>& live_replies,
+                  std::uint64_t producer_count,
+                  int commands_per_producer) {
+    using namespace domain;
+
+    engine.add_subscriber(subscriber);
+    engine.start();
+
+    // Several producers race: the interleaving differs from run to run,
+    // which is exactly what the journal must capture. Each has its own
+    // trader id and its own view of the orders it has seen accepted - kept
+    // here, not inside the producer lambda: a completion can still be in
+    // flight on the publisher thread after producers.clear() joins the
+    // producer threads below (joining only proves they stopped submitting,
+    // not that every reply was delivered yet), so anything a completion
+    // touches must outlive that join.
+    std::vector<AcceptedOrders> accepted_per_producer{producer_count};
+    std::vector<std::jthread> producers;
+    for (std::uint64_t seed = 1; seed <= producer_count; ++seed) {
+        producers.emplace_back([&engine, &live_replies, &accepted_per_producer, seed,
+                                commands_per_producer] {
+            std::mt19937_64 rng{seed};
+            const TraderId trader{seed};
+            AcceptedOrders& accepted = accepted_per_producer[seed - 1];
+            // Copyable, so every (re)submission gets a fresh Completion.
+            const auto record = [&live_replies,
+                                 &accepted](const app::CommandReply& reply) noexcept {
+                live_replies.push_back(reply);
+                if (reply.result.has_value() && reply.result->order_id.value() != 0) {
+                    accepted.record(reply.result->order_id);
+                }
+            };
+            for (int i = 0; i < commands_per_producer; ++i) {
+                const Command command =
+                    maybe_risk_command(rng, trader).value_or(random_command(rng, trader, accepted));
+                // Retry only on back-pressure; any other refusal is a test bug
+                // and must fail loudly rather than spin forever.
+                for (;;) {
+                    const auto submitted = std::holds_alternative<BlockTrader>(command) ||
+                                                   std::holds_alternative<UnblockTrader>(command) ||
+                                                   std::holds_alternative<KillSwitch>(command)
+                                               ? engine.broadcast(command)
+                                               : engine.submit(command, record);
+                    if (submitted || submitted.error() != app::SubmitError::Overloaded) {
+                        EXPECT_TRUE(submitted.has_value()) << app::to_string(submitted.error());
+                        break;
+                    }
+                    std::this_thread::yield();
+                }
+            }
+        });
+    }
+    producers.clear();  // join producers, then drain the engine
+    EXPECT_TRUE(engine.broadcast(KillSwitch{RiskCommandId{1'000'000}, true}).has_value());
+    engine.stop();
 }
 
 }  // namespace lockstep::test

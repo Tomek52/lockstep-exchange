@@ -13,17 +13,21 @@
 #include <ranges>
 #include <vector>
 
+#include "lockstep/app/engine.hpp"
+#include "lockstep/app/messages.hpp"
 #include "lockstep/domain/commands.hpp"
 #include "lockstep/domain/types.hpp"
+
+#include "app/test_support.hpp"
 
 namespace lockstep::test {
 
 inline constexpr std::uint32_t instrument_count = 4;
 
 [[nodiscard]] inline std::vector<domain::InstrumentSpec> instruments() {
-    return std::views::iota(1U, instrument_count + 1) |
-           std::views::transform(
-               [](std::uint32_t id) { return domain::InstrumentSpec{.id = domain::InstrumentId{id}}; }) |
+    return std::views::iota(1U, instrument_count + 1) | std::views::transform([](std::uint32_t id) {
+               return domain::InstrumentSpec{.id = domain::InstrumentId{id}};
+           }) |
            std::ranges::to<std::vector>();
 }
 
@@ -54,7 +58,8 @@ private:
 ///  - occasional invalid price/quantity and duplicate client-order-id
 ///    submissions - rejections the journal must still record and replay
 ///    identically, which is exactly what makes them worth generating.
-[[nodiscard]] domain::Command random_command(std::mt19937_64& rng, domain::TraderId trader,
+[[nodiscard]] domain::Command random_command(std::mt19937_64& rng,
+                                             domain::TraderId trader,
                                              AcceptedOrders& accepted);
 
 /// A BlockTrader/UnblockTrader/KillSwitch broadcast about one in
@@ -64,6 +69,25 @@ private:
 inline constexpr int risk_command_every = 400;
 
 [[nodiscard]] std::optional<domain::Command> maybe_risk_command(std::mt19937_64& rng,
-                                                                 domain::TraderId target_trader);
+                                                                domain::TraderId target_trader);
+
+inline constexpr std::uint64_t default_producer_count = 3;
+inline constexpr int default_commands_per_producer = 2'000;
+
+/// Runs the shared randomized workload against an already-constructed,
+/// not-yet-started `engine` (so the caller picks its journal factory: memory
+/// for a fast in-process comparison, file for the on-disk round trip): adds
+/// `subscriber`, starts the engine, races `producer_count` producers each
+/// submitting `commands_per_producer` commands from random_command() plus
+/// occasional risk broadcasts, appends every CommandReply to `live_replies`
+/// (completions run on the publisher thread, so this is its only writer),
+/// then stops the engine. After this returns, `engine`, `subscriber` and
+/// `live_replies` hold the complete live run, and `engine`'s shards are
+/// inspectable (ShardRuntime::engine()/book()) since Engine::stop() joined.
+void run_workload(app::Engine& engine,
+                  RecordingSubscriber& subscriber,
+                  std::vector<app::CommandReply>& live_replies,
+                  std::uint64_t producer_count = default_producer_count,
+                  int commands_per_producer = default_commands_per_producer);
 
 }  // namespace lockstep::test
