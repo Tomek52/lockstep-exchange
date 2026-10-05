@@ -23,6 +23,10 @@ struct Options {
     // instruments, shard count and risk link policy; passing it together with
     // --instruments is an error. Empty means "use the flags above".
     std::filesystem::path config_file;
+    // Prints each shard's digest (app::digest, task 010) at shutdown, after
+    // the journal is fully committed and closed, by replaying it from disk -
+    // the exact path lockstep-replay takes, so the two always agree.
+    bool print_digest_on_exit{false};
     bool help{false};
 };
 
@@ -36,6 +40,7 @@ inline constexpr const char* usage = R"(usage: exchange-core [options]
   --config=FILE               JSON config of instruments/shards    (excludes --instruments)
   --journal-dir=DIR           directory for shard-<id>.jnl files   (default ./journal)
   --fsync=none|commit         fdatasync journal on every commit    (default commit)
+  --print-digest-on-exit      print each shard's digest at shutdown (task 010)
   --help)";
 
 /// Parses `--key=value` style arguments. Startup-time code: errors are

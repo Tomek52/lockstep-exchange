@@ -29,10 +29,12 @@
 #include "lockstep/journal/file_journal_writer.hpp"
 #include "lockstep/journal/format.hpp"
 #include "lockstep/journal/record_codec.hpp"
+#include "lockstep/journal/restart.hpp"
 #include "lockstep/risk_client/risk_client.hpp"
 #include "lockstep/support/log.hpp"
 
 #include "options.hpp"
+#include "shard_digest.hpp"
 #include <pthread.h>
 
 namespace {
@@ -133,11 +135,43 @@ int run(const main_app::Options& options) {
     const auto router = app::Router::round_robin(config.instruments, config.shard_count);
     const auto sync =
         options.fsync_every_commit ? journal::SyncPolicy::EveryCommit : journal::SyncPolicy::None;
+
+    // Restart (ADR-0020): for each shard whose journal file already exists
+    // (e.g. after `docker compose stop` and `start`), recover its tail and
+    // read it back before this run touches the file at all. A refusal
+    // (corrupt, torn beyond repair, or recorded under a different config)
+    // stops startup naming the file; recover_for_restart never deletes or
+    // truncates a file it refuses. A shard with no existing file gets an
+    // empty, "fresh start" result.
+    std::vector<journal::ShardRestart> shard_restarts;
+    shard_restarts.reserve(config.shard_count);
+    for (std::uint32_t s = 0; s < config.shard_count; ++s) {
+        const domain::ShardId shard{s};
+        const auto instruments = router.instruments_of(shard);
+        const domain::ShardConfig shard_config{
+            .shard = shard,
+            .instruments = {instruments.begin(), instruments.end()},
+            .risk_link_policy = config.risk_link_policy};
+        auto recovered = journal::recover_for_restart(
+            options.journal_dir, shard_config, static_cast<std::uint32_t>(config.shard_count));
+        if (!recovered) {
+            throw std::runtime_error(std::move(recovered).error());
+        }
+        shard_restarts.push_back(std::move(*recovered));
+    }
+
     // Captures by value what it needs from `config`: the Engine takes `config`
     // by move before it calls the factory.
     auto journal_factory =
-        [&router, &options, sync, shard_count = static_cast<std::uint32_t>(config.shard_count),
+        [&router, &options, &shard_restarts, sync,
+         shard_count = static_cast<std::uint32_t>(config.shard_count),
          policy = config.risk_link_policy](domain::ShardId shard) -> std::unique_ptr<app::Journal> {
+        if (shard_restarts.at(shard.value()).existed) {
+            // Already recovered and header-checked above: reopen it to
+            // append after the records resume_factory is about to replay
+            // (ADR-0020), rather than refuse it like create()'s O_EXCL would.
+            return journal::FileJournalWriter::open_for_append(options.journal_dir, shard, sync);
+        }
         const auto instruments = router.instruments_of(shard);
         const domain::ShardConfig shard_config{
             .shard = shard,
@@ -150,11 +184,20 @@ int run(const main_app::Options& options) {
                                 .config_hash = journal::config_hash(shard_config)},
             sync);
     };
+    // Rebuilds each shard's state from what was just recovered (ADR-0020),
+    // before its thread starts. Moves each shard's commands out exactly
+    // once: Engine's constructor calls this once per shard.
+    app::ResumeFactory resume_factory = [&shard_restarts](domain::ShardId shard) {
+        return std::move(shard_restarts.at(shard.value()).resume_commands);
+    };
     // Captured before the Engine moves `config` out from under us, for the
-    // startup log line (the config file may differ from the --shards flag).
+    // startup log line and for --print-digest-on-exit after shutdown (the
+    // config file may differ from the --shards flag).
     const std::size_t shard_count_for_log = config.shard_count;
     const std::size_t instrument_count_for_log = config.instruments.size();
-    app::Engine engine{std::move(config), std::move(journal_factory), clock};
+    const domain::RiskLinkPolicy policy_for_log = config.risk_link_policy;
+    app::Engine engine{std::move(config), std::move(journal_factory), clock,
+                       std::move(resume_factory)};
     support::info("journal: writing {} (fsync={})", options.journal_dir.string(),
                   options.fsync_every_commit ? "commit" : "none");
 
@@ -188,6 +231,27 @@ int run(const main_app::Options& options) {
         risk->stop();
     }
     engine.stop();
+
+    if (options.print_digest_on_exit) {
+        // Re-reads each shard's now fully committed and closed journal file
+        // from disk, the same way lockstep-replay does (shard_digest.hpp),
+        // so this always equals a `lockstep-replay` run over the same
+        // directory afterwards - including any records replayed-but-not-
+        // published at this run's own startup (ADR-0020), which a digest
+        // built only from this run's in-memory outputs would miss.
+        for (std::uint32_t s = 0; s < shard_count_for_log; ++s) {
+            const domain::ShardId shard{s};
+            const auto result = main_app::compute_shard_digest(
+                options.journal_dir, router, shard, static_cast<std::uint32_t>(shard_count_for_log),
+                policy_for_log);
+            if (!result) {
+                support::info("digest: {}", result.error());
+                continue;
+            }
+            std::println("{}", main_app::format_shard_digest_line(result->line));
+        }
+    }
+
     support::info("exchange-core stopped cleanly");
     return EXIT_SUCCESS;
 }

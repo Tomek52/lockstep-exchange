@@ -79,6 +79,8 @@ std::expected<Options, std::string> parse_options(std::span<char* const> args) {
                 return std::unexpected(std::string{"--journal-dir: a directory is required"});
             }
             options.journal_dir = value;
+        } else if (key == "--print-digest-on-exit") {
+            options.print_digest_on_exit = true;
         } else if (key == "--fsync") {
             if (value != "none" && value != "commit") {
                 return std::unexpected("--fsync: expected 'none' or 'commit', got '" +

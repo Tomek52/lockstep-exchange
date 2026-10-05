@@ -12,8 +12,8 @@
 namespace lockstep::journal {
 
 std::expected<ShardRestart, std::string> recover_for_restart(const std::filesystem::path& dir,
-                                                              const domain::ShardConfig& config,
-                                                              std::uint32_t shard_count) {
+                                                             const domain::ShardConfig& config,
+                                                             std::uint32_t shard_count) {
     const std::filesystem::path path = dir / FileJournalWriter::file_name(config.shard);
     if (!std::filesystem::exists(path)) {
         return ShardRestart{};  // fresh start: no journal to resume

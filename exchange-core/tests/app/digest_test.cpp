@@ -2,12 +2,12 @@
 // field of every event/reply, to their order, and to book state, since it is
 // the oracle lockstep-replay and --print-digest-on-exit rely on to prove two
 // runs produced identical output (ADR-0004).
+#include "lockstep/app/digest.hpp"
+
 #include <cstdint>
 #include <vector>
 
 #include <gtest/gtest.h>
-
-#include "lockstep/app/digest.hpp"
 
 namespace lockstep::app {
 namespace {
@@ -15,18 +15,17 @@ namespace {
 using namespace domain;
 
 PublishedEvent accepted_event() {
-    return PublishedEvent{
-        .shard = ShardId{0},
-        .sequence = SequenceNumber{1},
-        .timestamp = Timestamp{100},
-        .event = OrderAccepted{.order_id = OrderId{7},
-                               .trader = TraderId{3},
-                               .client_order_id = ClientOrderId{9},
-                               .instrument = InstrumentId{1},
-                               .side = Side::Buy,
-                               .type = OrderType::Limit,
-                               .price = Price{55},
-                               .quantity = Quantity{10}}};
+    return PublishedEvent{.shard = ShardId{0},
+                          .sequence = SequenceNumber{1},
+                          .timestamp = Timestamp{100},
+                          .event = OrderAccepted{.order_id = OrderId{7},
+                                                 .trader = TraderId{3},
+                                                 .client_order_id = ClientOrderId{9},
+                                                 .instrument = InstrumentId{1},
+                                                 .side = Side::Buy,
+                                                 .type = OrderType::Limit,
+                                                 .price = Price{55},
+                                                 .quantity = Quantity{10}}};
 }
 
 CommandReply ok_reply() {
@@ -37,10 +36,10 @@ CommandReply ok_reply() {
 }
 
 BookSnapshot one_level_book() {
-    return BookSnapshot{.instrument = InstrumentId{1},
-                        .bids = {LevelView{.price = Price{55}, .quantity = Quantity{10},
-                                           .order_count = 1}},
-                        .asks = {}};
+    return BookSnapshot{
+        .instrument = InstrumentId{1},
+        .bids = {LevelView{.price = Price{55}, .quantity = Quantity{10}, .order_count = 1}},
+        .asks = {}};
 }
 
 ReplayOutput base_output() {

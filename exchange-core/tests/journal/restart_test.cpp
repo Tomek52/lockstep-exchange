@@ -35,13 +35,12 @@ ShardConfig config_for(ShardId shard) {
 }
 
 SequencedCommand sequenced(std::uint64_t i) {
-    return SequencedCommand{
-        SequenceNumber{i + 1}, Timestamp{static_cast<std::int64_t>(1'000 + i)},
-        NewOrder{.trader = TraderId{i},
-                .client_order_id = ClientOrderId{i},
-                .instrument = InstrumentId{1},
-                .price = Price{static_cast<std::int64_t>(10 + i)},
-                .quantity = Quantity{1}}};
+    return SequencedCommand{SequenceNumber{i + 1}, Timestamp{static_cast<std::int64_t>(1'000 + i)},
+                            NewOrder{.trader = TraderId{i},
+                                     .client_order_id = ClientOrderId{i},
+                                     .instrument = InstrumentId{1},
+                                     .price = Price{static_cast<std::int64_t>(10 + i)},
+                                     .quantity = Quantity{1}}};
 }
 
 class RestartTest : public ::testing::Test {
@@ -73,8 +72,8 @@ private:
 void write_journal(const fs::path& dir, const ShardConfig& config, std::uint64_t commands) {
     const auto writer = FileJournalWriter::create(
         dir,
-        FileHeader{.shard = config.shard, .shard_count = shard_count,
-                  .config_hash = config_hash(config)},
+        FileHeader{
+            .shard = config.shard, .shard_count = shard_count, .config_hash = config_hash(config)},
         SyncPolicy::EveryCommit);
     for (std::uint64_t i = 0; i < commands; ++i) {
         ASSERT_TRUE(writer->append(sequenced(i)).has_value());

@@ -14,8 +14,7 @@ namespace {
 
 using namespace domain;
 
-NewOrder buy(TraderId trader, ClientOrderId client_order_id, InstrumentId instrument,
-            Price price) {
+NewOrder buy(TraderId trader, ClientOrderId client_order_id, InstrumentId instrument, Price price) {
     return NewOrder{.trader = trader,
                     .client_order_id = client_order_id,
                     .instrument = instrument,
@@ -42,8 +41,8 @@ TEST(Resume, ReplaysRecordsBeforeStartAndContinuesSequenceAndOrderIds) {
         return shard == ShardId{0} ? resting_order_commands() : std::vector<SequencedCommand>{};
     };
     Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}, {.id = InstrumentId{2}}},
-                              .shard_count = 2},
-                 journals.factory(), clock, std::move(resume)};
+                               .shard_count = 2},
+                  journals.factory(), clock, std::move(resume)};
 
     // The resumed order must already be resting, and visible, before start():
     // engine()/book() are only valid while the shard thread is not running.
@@ -58,9 +57,10 @@ TEST(Resume, ReplaysRecordsBeforeStartAndContinuesSequenceAndOrderIds) {
     // A new order on the same shard must get the next order id and the next
     // sequence number after the resumed one, not restart from zero/one.
     auto [completion, reply] = test::reply_future();
-    ASSERT_TRUE(
-        engine.submit(buy(TraderId{2}, ClientOrderId{2}, InstrumentId{1}, Price{40}), std::move(completion))
-            .has_value());
+    ASSERT_TRUE(engine
+                    .submit(buy(TraderId{2}, ClientOrderId{2}, InstrumentId{1}, Price{40}),
+                            std::move(completion))
+                    .has_value());
     ASSERT_EQ(reply.wait_for(test::reply_timeout), std::future_status::ready);
     const CommandReply ack = reply.get();
     engine.stop();
@@ -70,9 +70,8 @@ TEST(Resume, ReplaysRecordsBeforeStartAndContinuesSequenceAndOrderIds) {
         << "sequence numbering must resume after the replayed record, not restart at 1";
     // Order ids are a per-shard counter (ShardEngine::next_order_id): the
     // resumed order must have consumed the first one.
-    const OrderId resumed_order = book->find(ack.result->order_id) != nullptr
-                                      ? ack.result->order_id
-                                      : OrderId{0};
+    const OrderId resumed_order =
+        book->find(ack.result->order_id) != nullptr ? ack.result->order_id : OrderId{0};
     (void)resumed_order;  // the id itself is opaque; what matters is it differs below
     EXPECT_NE(ack.result->order_id, OrderId{0});
 
@@ -92,7 +91,7 @@ TEST(Resume, EmptyResumeFactoryBehavesLikeAFreshShard) {
     test::MemoryJournals journals;
     ResumeFactory resume = [](ShardId /*shard*/) { return std::vector<SequencedCommand>{}; };
     Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}}, .shard_count = 1},
-                 journals.factory(), clock, std::move(resume)};
+                  journals.factory(), clock, std::move(resume)};
 
     const OrderBook* book = engine.shard(ShardId{0}).engine().book(InstrumentId{1});
     ASSERT_NE(book, nullptr);

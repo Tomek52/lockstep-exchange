@@ -35,7 +35,6 @@ struct ShardRestart {
 /// recover_tail does to a torn tail. Must not run while a writer or another
 /// recoverer has the file open (recover_tail's precondition).
 [[nodiscard]] std::expected<ShardRestart, std::string> recover_for_restart(
-    const std::filesystem::path& dir, const domain::ShardConfig& config,
-    std::uint32_t shard_count);
+    const std::filesystem::path& dir, const domain::ShardConfig& config, std::uint32_t shard_count);
 
 }  // namespace lockstep::journal

@@ -70,6 +70,7 @@ using JournalFactory = std::move_only_function<std::unique_ptr<Journal>(domain::
 /// Empty (the default-constructed, "falsy" move_only_function) when the
 /// composition root has nothing to resume, in which case Engine skips the
 /// replay step entirely rather than calling it for an empty result.
-using ResumeFactory = std::move_only_function<std::vector<domain::SequencedCommand>(domain::ShardId)>;
+using ResumeFactory =
+    std::move_only_function<std::vector<domain::SequencedCommand>(domain::ShardId)>;
 
 }  // namespace lockstep::app

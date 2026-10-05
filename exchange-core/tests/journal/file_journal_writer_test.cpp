@@ -232,9 +232,8 @@ TEST_F(FileJournalWriterTest, OpenForAppendWritesAfterExistingRecords) {
 }
 
 TEST_F(FileJournalWriterTest, OpenForAppendThrowsWhenFileIsMissing) {
-    EXPECT_THROW(
-        (void)FileJournalWriter::open_for_append(dir(), header.shard, SyncPolicy::None),
-        std::runtime_error);
+    EXPECT_THROW((void)FileJournalWriter::open_for_append(dir(), header.shard, SyncPolicy::None),
+                 std::runtime_error);
 }
 
 TEST_F(FileJournalWriterTest, RefusesToOverwriteAnExistingJournal) {

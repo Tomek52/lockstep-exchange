@@ -48,11 +48,13 @@ std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& confi
 
 }  // namespace
 
-Engine::Engine(EngineConfig config, JournalFactory journal_factory, Clock& clock,
-              ResumeFactory resume_factory)
+Engine::Engine(EngineConfig config,
+               JournalFactory journal_factory,
+               Clock& clock,
+               ResumeFactory resume_factory)
     : router_{Router::round_robin(config.instruments, config.shard_count)},
-      shards_{make_shards(config, router_, journal_factory, resume_factory, clock,
-                          publisher_doorbell_)},
+      shards_{make_shards(
+          config, router_, journal_factory, resume_factory, clock, publisher_doorbell_)},
       publisher_{egress_queues(shards_), publisher_doorbell_} {}
 
 Engine::~Engine() {
