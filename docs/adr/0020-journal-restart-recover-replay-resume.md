@@ -19,7 +19,7 @@ Two things must both be true after a restart:
 - the restart must not corrupt or discard a journal that `recover_tail`
   (task 009) cannot safely repair.
 
-## <a id="adr0020-decision-v1"></a>Decision
+## <a id="adr0020-decision-v2"></a>Decision
 
 On startup, for each shard journal that already exists in `--journal-dir`:
 
@@ -56,16 +56,24 @@ On startup, for each shard journal that already exists in `--journal-dir`:
    owner-only; `open_for_append`'s doc comment says so. Continue the
    sequence numbering from the last recovered record's sequence number.
 6. Before accepting any traffic from outside (gRPC order entry, the risk
-   link), broadcast `RiskLinkStatus{connected=false}` to every shard as this
-   run's own first live command, journaled like any other. A crash can leave
-   the recovered state's last known link status as `connected=true` - the
-   link really was up when the process died - and resuming that naively
-   would let `RiskLinkPolicy::FailClosed` treat the link as live with
-   nothing actually connected on this run. This is unconditional (a fresh
-   start journals it too, harmlessly: `RiskState::set_link_connected` is
+   link), journal `RiskLinkStatus{connected=false}` on every shard as this
+   run's own first live command. A crash can leave the recovered state's
+   last known link status as `connected=true` - the link really was up when
+   the process died - and resuming that naively would let
+   `RiskLinkPolicy::FailClosed` treat the link as live with nothing
+   actually connected on this run. This is unconditional (a fresh start
+   journals it too, harmlessly: `RiskState::set_link_connected` is
    idempotent, and a fresh `ShardEngine` already starts disconnected), so a
    fresh start's journal has the same shape as a resumed one, and the
    decision does not depend on inspecting the resumed state first.
+   `Engine::start(startup_commands)` (task 010 review auditor F-2) pushes
+   this onto every shard's ingress before any shard thread is created and
+   before `start()` marks the engine accepting - not `broadcast()` after
+   `start()` returns, which only makes it *likely* to be first, not
+   structurally guaranteed: nothing (not even a `submit()`/`broadcast()`
+   racing in from another thread the instant `start()` returns) can reach a
+   shard's ingress before `accepting_` is set, and that only happens after
+   every startup command has already been pushed.
 
 A journal directory with no existing file for a shard is unaffected: that
 shard starts exactly as it does today (`FileJournalWriter::create`).

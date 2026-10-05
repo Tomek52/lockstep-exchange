@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "lockstep/app/fatal.hpp"
+
 namespace lockstep::app {
 
 namespace {
@@ -70,8 +72,23 @@ std::shared_ptr<Subscription> Engine::subscribe(SubscriptionFilter filter, std::
     return publisher_.subscribe(std::move(filter), capacity);
 }
 
-void Engine::start() {
+void Engine::start(std::span<const domain::Command> startup_commands) {
     start_called_ = true;
+    // Pushed before any shard thread exists and before accepting_ is set
+    // (see this method's doc comment, task 010 review auditor F-2): no
+    // submit()/broadcast() call can reach a shard's ingress until
+    // accepting_ is true, so every one of these is guaranteed to be popped
+    // before anything else, in the order given here, on every shard.
+    for (const auto& shard : shards_) {
+        for (const domain::Command& command : startup_commands) {
+            if (!shard->ingress().try_push(InboundCommand{command, {}})) {
+                // Can only happen if ingress_capacity is smaller than
+                // startup_commands.size() - a misconfiguration, not a
+                // runtime condition to recover from.
+                fatal("Engine::start: ingress full for startup commands");
+            }
+        }
+    }
     for (const auto& shard : shards_) {
         shard_threads_.emplace_back(
             [runtime = shard.get()](const std::stop_token& stop) { runtime->run(stop); });

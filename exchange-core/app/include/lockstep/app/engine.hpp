@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <expected>
 #include <memory>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include "lockstep/app/shard_runtime.hpp"
 #include "lockstep/concurrency/cache_aligned.hpp"
 #include "lockstep/concurrency/idle_strategy.hpp"
+#include "lockstep/domain/commands.hpp"
 #include "lockstep/domain/risk_state.hpp"
 #include "lockstep/domain/types.hpp"
 
@@ -68,7 +70,18 @@ public:
     /// on_ready() hook): that case aborts via fatal() rather than
     /// deadlocking.
     std::shared_ptr<Subscription> subscribe(SubscriptionFilter filter, std::size_t capacity);
-    void start();
+    /// Starts every shard and the publisher. `startup_commands`, if any, are
+    /// pushed onto *every* shard's ingress - broadcast, like broadcast()'s
+    /// own commands - before any shard thread is created and before this
+    /// call sets the engine accepting (task 010 review auditor F-2): this
+    /// makes them structurally the first command each shard's thread ever
+    /// pops, not merely "submitted before anything else gets a chance to" -
+    /// nothing else can reach a shard's ingress until accepting_ is true,
+    /// and that only happens after every startup command has already been
+    /// pushed. The composition root uses this for
+    /// `RiskLinkStatus{connected=false}` (ADR-0020); tests that want the
+    /// same guarantee call it the same way.
+    void start(std::span<const domain::Command> startup_commands = {});
     void stop();
 
     [[nodiscard]] std::expected<void, SubmitError> submit(domain::Command command,

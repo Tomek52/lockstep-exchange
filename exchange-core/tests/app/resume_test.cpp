@@ -2,7 +2,10 @@
 // ResumeFactory replays recovered commands into a shard's engine before any
 // thread starts, continuing order ids, books and sequence numbers, without
 // publishing the replayed outputs anywhere.
+#include <array>
 #include <future>
+#include <thread>
+#include <tuple>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -94,7 +97,8 @@ TEST(Resume, ReplaysRecordsBeforeStartAndContinuesSequenceAndOrderIds) {
 // that the composition root journals RiskLinkStatus{connected=false} as
 // this run's first live command, overriding the stale resumed state before
 // anything can submit an order; this test exercises exactly that sequence
-// at the Engine level (main.cpp does the same broadcast call after start()).
+// at the Engine level, passing it to start() the same way main.cpp does
+// (task 010 review auditor F-2).
 TEST(Resume, RestartWithFailClosedRejectsOrdersUntilTheLinkReconnects) {
     ManualClock clock{1'000, 10};
     test::MemoryJournals journals;
@@ -112,8 +116,8 @@ TEST(Resume, RestartWithFailClosedRejectsOrdersUntilTheLinkReconnects) {
                                .shard_count = 1,
                                .risk_link_policy = RiskLinkPolicy::FailClosed},
                   journals.factory(), clock, std::move(resume)};
-    engine.start();
-    ASSERT_TRUE(engine.broadcast(RiskLinkStatus{.connected = false}).has_value());
+    const std::array<Command, 1> startup_commands{RiskLinkStatus{.connected = false}};
+    engine.start(startup_commands);
 
     auto [completion, reply] = test::reply_future();
     ASSERT_TRUE(engine
@@ -126,6 +130,77 @@ TEST(Resume, RestartWithFailClosedRejectsOrdersUntilTheLinkReconnects) {
 
     ASSERT_FALSE(ack.result.has_value());
     EXPECT_EQ(ack.result.error(), RejectReason::RiskUnavailable);
+}
+
+// Task 010 review auditor F-2: start()'s startup_commands must be the first
+// thing every shard's thread ever pops, even when submitters race to get an
+// order in the instant start() returns - not merely "usually first" because
+// nothing else had submitted yet. Exercised on a resumed journal (so every
+// shard already has N1 >= 1 resumed records, and the race is against the
+// *next* sequence number, not against an empty shard) and run under tsan to
+// catch any ordering bug, not just observe it once.
+TEST(Resume, StartupCommandIsFirstRecordDespiteConcurrentSubmitters) {
+    constexpr std::uint32_t shard_count = 4;
+    constexpr int submitter_count = 64;
+    constexpr std::uint32_t submits_per_thread = 20;
+
+    ManualClock clock{1'000, 10};
+    test::MemoryJournals journals;
+
+    // Every shard resumes exactly one record, so N1 == 1 everywhere and the
+    // startup command must land at sequence 2.
+    ResumeFactory resume = [](ShardId /*shard*/) -> std::vector<SequencedCommand> {
+        return {
+            SequencedCommand{SequenceNumber{1}, Timestamp{500}, RiskLinkStatus{.connected = true}}};
+    };
+
+    std::vector<InstrumentSpec> instruments;
+    for (std::uint32_t i = 0; i < shard_count; ++i) {
+        instruments.push_back({.id = InstrumentId{i + 1}});
+    }
+    Engine engine{EngineConfig{.instruments = instruments, .shard_count = shard_count},
+                  journals.factory(), clock, std::move(resume)};
+
+    // Spawned and already spinning *before* start() is even called, so the
+    // only latency between "accepting_ becomes true" and "a submitter's
+    // try_push lands" is a spin-loop reload - thread creation (which would
+    // otherwise dwarf the whole race window) happens entirely beforehand.
+    // Each thread retries submit() until it stops seeing ShuttingDown (the
+    // only error submit() can give before start(), per its precondition).
+    std::vector<std::thread> submitters;
+    submitters.reserve(submitter_count);
+    for (int t = 0; t < submitter_count; ++t) {
+        const auto trader = static_cast<std::uint32_t>(t);
+        submitters.emplace_back([&engine, trader] {
+            for (std::uint32_t i = 0; i < submits_per_thread; ++i) {
+                const InstrumentId instrument{(i % shard_count) + 1};
+                // Fire-and-forget: only the race to get *into* the ingress
+                // queue matters here, not the reply.
+                while (!engine
+                            .submit(buy(TraderId{trader}, ClientOrderId{i}, instrument, Price{10}),
+                                    [](const CommandReply&) noexcept {})
+                            .has_value()) {
+                    // Spin: before start(), submit() fails with
+                    // ShuttingDown every time (accepting_ starts false).
+                }
+            }
+        });
+    }
+    const std::array<Command, 1> startup_commands{RiskLinkStatus{.connected = false}};
+    engine.start(startup_commands);
+    for (auto& thread : submitters) {
+        thread.join();
+    }
+    engine.stop();
+
+    for (std::uint32_t s = 0; s < shard_count; ++s) {
+        const auto committed = journals.of(ShardId{s}).committed();
+        ASSERT_FALSE(committed.empty()) << "shard " << s;
+        EXPECT_EQ(committed.front().sequence, SequenceNumber{2}) << "shard " << s;
+        const auto* status = std::get_if<RiskLinkStatus>(&committed.front().command);
+        ASSERT_NE(status, nullptr) << "shard " << s;
+        EXPECT_FALSE(status->connected) << "shard " << s;
+    }
 }
 
 TEST(Resume, EmptyResumeFactoryBehavesLikeAFreshShard) {

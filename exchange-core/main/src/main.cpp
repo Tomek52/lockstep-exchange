@@ -1,6 +1,7 @@
 // Composition root: the only place that knows every concrete type. It builds
 // the application core, plugs adapters into its ports, and owns the shutdown
 // order (ADR-0002, ADR-0003).
+#include <array>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
@@ -8,6 +9,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <print>
 #include <ranges>
 #include <span>
@@ -204,23 +206,25 @@ int run(const main_app::Options& options) {
         engine.add_subscriber(*risk);
     }
 
-    engine.start();
     // Every shard's risk link starts this run disconnected, journaled as an
     // explicit command rather than assumed (ADR-0004, ADR-0020 review F2):
     // a restart's resumed state can end with RiskLinkStatus{connected=true}
     // from the previous run (it was up when the process died), and under
     // FailClosed that stale "connected" would silently let new orders
-    // through with no live risk link. Broadcasting here, after start() but
-    // before anything can reach the engine from outside (the gRPC server
-    // and the risk client both start later), makes this always the first
-    // live command every shard processes - deterministic and unconditional,
+    // through with no live risk link. Passed to start() as a startup
+    // command (task 010 review auditor F-2) rather than broadcast()
+    // afterwards: that makes it structurally, not just temporally, the
+    // first command every shard processes - no submit()/broadcast() can
+    // reach a shard's ingress until start() sets the engine accepting, so
+    // there is no window for anything else (the gRPC server and the risk
+    // client both start later anyway) to get there first. Unconditional,
     // not only on a restart, so a fresh start's journal looks the same
     // shape as a resumed one. RiskLinkStatus is idempotent
     // (RiskState::set_link_connected) and a fresh ShardEngine already
     // starts disconnected, so this is a no-op there, not a new behaviour.
-    if (!engine.broadcast(domain::RiskLinkStatus{.connected = false})) {
-        throw std::runtime_error("startup: could not journal the initial RiskLinkStatus");
-    }
+    const std::array<domain::Command, 1> startup_commands{
+        domain::RiskLinkStatus{.connected = false}};
+    engine.start(startup_commands);
     grpc_adapter::OrderEntryService order_entry{engine};
     grpc_adapter::GrpcServer server{options.listen, {&order_entry}};
     if (risk) {
@@ -259,8 +263,14 @@ int run(const main_app::Options& options) {
             const domain::ShardId shard{s};
             const app::ShardRuntime& shard_runtime = engine.shard(shard);
             // config.record_digest was set above whenever this flag is, so
-            // every shard has one.
-            const app::DigestBuilder& builder = *shard_runtime.digest_builder();
+            // every shard has one - checked explicitly (not just asserted
+            // in this comment) so clang-tidy's bugprone-unchecked-optional-
+            // access can see the invariant too.
+            const std::optional<app::DigestBuilder>& maybe_builder = shard_runtime.digest_builder();
+            if (!maybe_builder) {
+                throw std::runtime_error("print-digest-on-exit: shard has no digest builder");
+            }
+            const app::DigestBuilder& builder = *maybe_builder;
             std::vector<domain::BookSnapshot> books;
             for (const domain::InstrumentSpec& spec : router.instruments_of(shard)) {
                 if (const domain::OrderBook* book = shard_runtime.engine().book(spec.id)) {

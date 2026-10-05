@@ -31,6 +31,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 replay_bin="$(dirname "${core_bin}")/lockstep-replay"
+journal_dump_bin="$(dirname "${core_bin}")/journal-dump"
 
 core_port="${CORE_PORT:-15051}"
 sentinel_port="${SENTINEL_PORT:-15052}"
@@ -63,7 +64,8 @@ wait_for_log() {
   return 1
 }
 
-for bin in "${core_bin}" "${replay_bin}" "${rust_bin_dir}/risk-sentinel" "${rust_bin_dir}/loadgen"; do
+for bin in "${core_bin}" "${replay_bin}" "${journal_dump_bin}" "${rust_bin_dir}/risk-sentinel" \
+  "${rust_bin_dir}/loadgen"; do
   [[ -x "${bin}" ]] || { echo "missing binary: ${bin} (build first)" >&2; exit 1; }
 done
 
@@ -86,6 +88,34 @@ digest_lines_match() {
   echo "${from_replay}" | sed 's/^/      /'
   if [[ "${from_core}" != "${from_replay}" ]]; then
     echo "digest mismatch (${label}): exchange-core vs lockstep-replay" >&2
+    exit 1
+  fi
+}
+
+# commands_journaled <core.log> <shard>: the "N commands" --print-digest-on-exit
+# printed for that shard - this run's total record count (N1), including
+# every resumed record. Used, not a hardcoded count, because the risk client
+# itself broadcasts RiskLinkStatus{connected=true}/{false} as it connects and
+# disconnects (on every shard, not just the one with orders), so N1 is more
+# than "1 startup command + however many orders landed on this shard".
+commands_journaled() {
+  grep -E "^shard $2: " "$1" | sed -E 's/^shard [0-9]+: ([0-9]+) commands.*/\1/'
+}
+
+# record_is_risk_disconnected <shard.jnl> <1-based record number> <expected
+# seq>: task 010 review auditor F-2's m1 - Engine::start() pushes
+# RiskLinkStatus{connected=false} onto every shard's ingress before
+# accepting_ is set (ADR-0020), so it must be structurally this run's very
+# first record, not merely "usually first". journal-dump prints the header
+# on its own line, then one line per record in file order, so record N is
+# line N+1; on a resumed journal that is N1+1, not line 2 (the file's
+# overall first record is from a previous run).
+record_is_risk_disconnected() {
+  local file="$1" record_number="$2" expected_seq="$3" line
+  line="$("${journal_dump_bin}" "${file}" | sed -n "$((record_number + 1))p")"
+  echo "    ${file} record ${record_number}: ${line}"
+  if [[ "${line}" != "seq=${expected_seq} ts="*" RiskLinkStatus connected=false" ]]; then
+    echo "record ${record_number} of ${file} is not 'seq=${expected_seq} ... RiskLinkStatus connected=false': ${line}" >&2
     exit 1
   fi
 }
@@ -139,6 +169,12 @@ if (( $(stat -c %s "${journal_dir}/shard-1.jnl") <= journal_header_size )); then
   exit 1
 fi
 
+echo "==> first record of each shard journal is RiskLinkStatus connected=false (m1)"
+# Every shard's own first record this run, regardless of whether any order
+# landed on it (ADR-0020 step 6, task 010 review auditor F-2/m1).
+record_is_risk_disconnected "${journal_dir}/shard-0.jnl" 1 1
+record_is_risk_disconnected "${journal_dir}/shard-1.jnl" 1 1
+
 echo "==> lockstep-replay digest vs --print-digest-on-exit (first run)"
 digest_lines_match "${logs}/core.log" "first run"
 
@@ -166,6 +202,17 @@ kill -TERM "${core_pid}"
 wait "${core_pid}"
 core_pid=""
 grep -q "exchange-core stopped cleanly" "${logs}/core-restart.log"
+
+echo "==> first record this run is RiskLinkStatus connected=false, after the resumed ones (m1)"
+# N1 (how many records the first run left on each shard) comes from its own
+# --print-digest-on-exit output, not a hardcoded count: the risk client's
+# own connect/disconnect broadcasts land on every shard, including shard 0,
+# which no order ever reaches. This run's startup command must be exactly
+# the next record after those N1, not merely present somewhere in the file.
+shard0_n1="$(commands_journaled "${logs}/core.log" 0)"
+shard1_n1="$(commands_journaled "${logs}/core.log" 1)"
+record_is_risk_disconnected "${journal_dir}/shard-0.jnl" "$((shard0_n1 + 1))" "$((shard0_n1 + 1))"
+record_is_risk_disconnected "${journal_dir}/shard-1.jnl" "$((shard1_n1 + 1))" "$((shard1_n1 + 1))"
 
 echo "==> lockstep-replay digest vs --print-digest-on-exit (after restart)"
 digest_lines_match "${logs}/core-restart.log" "after restart"
