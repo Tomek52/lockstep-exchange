@@ -29,12 +29,27 @@ std::expected<ShardRestart, std::string> recover_for_restart(const std::filesyst
         .shard = config.shard, .shard_count = shard_count, .config_hash = config_hash(config)};
     ShardRestart result;
     result.existed = true;
+    // Sequence numbers start at 1 and increase by exactly 1 (ADR-0004: they
+    // come from the shard's own counter, which only ever increments by one
+    // per command). A gap or a restart of the counter means the file was
+    // produced by something other than a single ShardRuntime run - resuming
+    // it would continue sequence numbering from the wrong place, so this is
+    // refused before a single command is replayed, naming the file and the
+    // offending sequence. read_journal's own contract is unchanged: this
+    // check belongs to the caller, not the reader.
+    std::uint64_t expected_sequence = 1;
     for (auto&& record : read_journal(path, expect)) {
         if (!record) {
             return std::unexpected("journal: cannot restart on '" + path.string() +
                                    "': " + std::string(app::to_string(record.error())));
         }
+        if (record->sequence.value() != expected_sequence) {
+            return std::unexpected("journal: cannot restart on '" + path.string() + "': sequence " +
+                                   std::to_string(record->sequence.value()) +
+                                   " is not the expected " + std::to_string(expected_sequence));
+        }
         result.resume_commands.push_back(*record);
+        ++expected_sequence;
     }
     return result;
 }

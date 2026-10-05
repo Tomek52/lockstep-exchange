@@ -165,5 +165,38 @@ TEST_F(RestartTest, CorruptJournalIsRefusedAndFileIsByteIdentical) {
     EXPECT_EQ(read_file(path), before) << "a refused journal must never be modified";
 }
 
+// Task 010 review F3: sequence numbers must start at 1 and increase by
+// exactly 1; a gap means the file was not produced by a single
+// ShardRuntime run and must not be resumed.
+TEST_F(RestartTest, SequenceGapIsRefusedAndFileIsUnchanged) {
+    const auto config = config_for(ShardId{0});
+    const auto path = dir() / FileJournalWriter::file_name(ShardId{0});
+    {
+        const auto writer =
+            FileJournalWriter::create(dir(),
+                                      FileHeader{.shard = config.shard,
+                                                 .shard_count = shard_count,
+                                                 .config_hash = config_hash(config)},
+                                      SyncPolicy::EveryCommit);
+        ASSERT_TRUE(writer->append(sequenced(0)).has_value());  // sequence 1
+        // sequence 3 instead of 2: a gap.
+        ASSERT_TRUE(writer
+                        ->append(SequencedCommand{SequenceNumber{3}, Timestamp{1'003},
+                                                  sequenced(0).command})
+                        .has_value());
+        ASSERT_TRUE(writer->commit().has_value());
+    }
+    const auto before = read_file(path);
+
+    const auto result = recover_for_restart(dir(), config, shard_count);
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find(path.string()), std::string::npos)
+        << "error must name the file: " << result.error();
+    EXPECT_NE(result.error().find('3'), std::string::npos)
+        << "error must name the offending sequence: " << result.error();
+    EXPECT_EQ(read_file(path), before) << "a refused journal must never be modified";
+}
+
 }  // namespace
 }  // namespace lockstep::journal

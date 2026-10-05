@@ -173,6 +173,12 @@ int main(int argc, char** argv) try {
 
     const auto router =
         app::Router::round_robin(engine_config->instruments, engine_config->shard_count);
+    if (const auto valid = main_app::validate_journal_dir(
+            options->journal_dir, static_cast<std::uint32_t>(engine_config->shard_count));
+        !valid) {
+        std::println(stderr, "lockstep-replay: {}", valid.error());
+        return exit_journal_error;
+    }
     bool failed = false;
     for (std::uint32_t s = 0; s < engine_config->shard_count; ++s) {
         const domain::ShardId shard{s};

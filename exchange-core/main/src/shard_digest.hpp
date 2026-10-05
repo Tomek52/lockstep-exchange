@@ -51,4 +51,19 @@ struct ShardDigestResult {
 /// "shard 0: 12345 commands, 20211 events, digest=0x3f2a...".
 [[nodiscard]] std::string format_shard_digest_line(const ShardDigestLine& line);
 
+/// Validates `journal_dir` against `shard_count` before exchange-core
+/// restarts on it or lockstep-replay reads it (task 010 review F6):
+///
+///  - a `shard-<id>.jnl` file for an id >= shard_count is refused, naming
+///    the file: the header's own shard_count would disagree with such a
+///    file anyway (ADR-0012/ADR-0017), and silently ignoring it (it is
+///    outside 0..shard_count-1, so nothing reads it) would hide that the
+///    directory does not match this run's configuration;
+///  - if any shard in 0..shard_count-1 has a journal file, every shard in
+///    that range must, naming whichever are missing: a partial set is not
+///    a fresh start for the missing ones, it is a directory that does not
+///    match a single, consistent exchange run.
+[[nodiscard]] std::expected<void, std::string> validate_journal_dir(
+    const std::filesystem::path& journal_dir, std::uint32_t shard_count);
+
 }  // namespace lockstep::main_app

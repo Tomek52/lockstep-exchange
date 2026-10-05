@@ -138,6 +138,16 @@ int run(const main_app::Options& options) {
     const auto sync =
         options.fsync_every_commit ? journal::SyncPolicy::EveryCommit : journal::SyncPolicy::None;
 
+    // A stray shard-<id>.jnl for id >= shard_count, or a partial set of the
+    // shards this run expects, means the directory does not match a single,
+    // consistent exchange run (task 010 review F6) - refused before
+    // anything in it is touched.
+    if (const auto valid = main_app::validate_journal_dir(
+            options.journal_dir, static_cast<std::uint32_t>(config.shard_count));
+        !valid) {
+        throw std::runtime_error(valid.error());
+    }
+
     // Restart (ADR-0020): for each shard whose journal file already exists
     // (e.g. after `docker compose stop` and `start`), recover its tail and
     // read it back before this run touches the file at all. A refusal
