@@ -51,8 +51,9 @@ private:
 };
 
 /// Replays the whole of `dir`'s shard `shard` into a fresh ShardEngine, the
-/// same way lockstep-replay / --print-digest-on-exit do: every record from
-/// the journal on disk, nothing held back.
+/// same way lockstep-replay (and this test's own comparison against the
+/// live run's own app::DigestBuilder, task 010 review M1/F1/m2) do: every
+/// record from the journal on disk, nothing held back.
 app::ReplayOutput replay_whole_file(const fs::path& dir,
                                     const app::Router& router,
                                     ShardEngine& fresh,
@@ -118,6 +119,8 @@ TEST_F(RestartDeterminismTest, RestartedEngineMatchesAFreshReplayOfTheWholeDirec
     test::RecordingSubscriber run2_subscriber;
     std::vector<app::CommandReply> run2_replies;
     std::array<std::uint64_t, shard_count> last_sequence_from_run1{};
+    std::array<std::uint64_t, shard_count> live_digest_by_shard{};
+    std::array<std::vector<domain::BookSnapshot>, shard_count> live_books_by_shard;
     {
         app::ManualClock clock;
 
@@ -145,19 +148,32 @@ TEST_F(RestartDeterminismTest, RestartedEngineMatchesAFreshReplayOfTheWholeDirec
         app::ResumeFactory resume_factory = [&shard_restarts](ShardId shard) {
             return std::move(shard_restarts.at(shard.value()).resume_commands);
         };
-        app::Engine engine{
-            app::EngineConfig{.instruments = test::instruments(), .shard_count = shard_count},
-            std::move(journal_factory), clock, std::move(resume_factory)};
+        app::Engine engine{app::EngineConfig{.instruments = test::instruments(),
+                                             .shard_count = shard_count,
+                                             .record_digest = true},
+                           std::move(journal_factory), clock, std::move(resume_factory)};
         test::run_workload(engine, run2_subscriber, run2_replies, /*producer_count=*/2,
                            /*commands_per_producer=*/200);
 
         for (std::uint32_t s = 0; s < shard_count; ++s) {
             const ShardId shard{s};
+            std::vector<domain::BookSnapshot> shard_books;
             for (const InstrumentSpec& spec : router.instruments_of(shard)) {
                 const OrderBook* book = engine.shard(shard).engine().book(spec.id);
                 ASSERT_NE(book, nullptr);
+                shard_books.push_back(book->snapshot());
                 live_books_by_shard_then_instrument.push_back(book->snapshot());
             }
+            // Task 010 review m2: the live digest this shard's own
+            // ShardRuntime folded while it ran (resumed records from run 1
+            // included, since Config::record_digest was on before resume
+            // happened) must equal a from-disk replay's digest of the whole
+            // directory - the same live-vs-disk comparison F1 made
+            // file_journal_replay_test.cpp's LiveDigestEqualsDiskReplayDigest
+            // do, now across a restart instead of within a single run.
+            ASSERT_TRUE(engine.shard(shard).digest_builder().has_value());
+            live_digest_by_shard[s] = engine.shard(shard).digest_builder()->finish(shard_books);
+            live_books_by_shard[s] = std::move(shard_books);
         }
     }
 
@@ -202,6 +218,17 @@ TEST_F(RestartDeterminismTest, RestartedEngineMatchesAFreshReplayOfTheWholeDirec
         }
     }
     EXPECT_EQ(digest_first, digest_second);
+
+    // Task 010 review m2: close the loop between the live digest each
+    // shard folded as it ran (captured above, inside run 2's own scope) and
+    // app::digest's from-disk computation over the same full-directory
+    // replay this test already builds for the book-state check below - two
+    // different code paths over the same journal must agree bit for bit.
+    for (std::uint32_t s = 0; s < shard_count; ++s) {
+        const std::uint64_t replayed_digest =
+            app::digest(replayed_outputs_by_shard[s], live_books_by_shard[s]);
+        EXPECT_EQ(live_digest_by_shard[s], replayed_digest) << "shard " << s;
+    }
 
     ASSERT_EQ(live_books_by_shard_then_instrument.size(), replayed_books.size());
     for (std::size_t i = 0; i < replayed_books.size(); ++i) {
