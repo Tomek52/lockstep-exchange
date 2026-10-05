@@ -1,10 +1,15 @@
 #pragma once
 
 // Computes and prints one shard's digest line from its journal file on disk.
-// Shared by exchange-core's --print-digest-on-exit and the lockstep-replay
-// tool, so the two are guaranteed to agree bit for bit on the same journal
-// directory (ADR-0020's "digest on exit" rationale): both replay the file
-// through the exact same code path.
+// Used by the lockstep-replay tool and by tests that want a from-disk
+// oracle to compare a live run against (task 010 review M1/F1):
+// --print-digest-on-exit no longer calls compute_shard_digest() itself -
+// re-reading the file it just wrote would make that check a
+// replay-equals-replay tautology - it reads the live app::DigestBuilder
+// each shard's ShardRuntime folded as it ran instead (ADR-0020's "digest on
+// exit" rationale). format_shard_digest_line() still formats both: the
+// line's shape ("shard N: C commands, E events, digest=0x...") is the same
+// either way.
 
 #include <cstdint>
 #include <expected>
@@ -36,10 +41,14 @@ struct ShardDigestResult {
 /// Reads shard `shard`'s journal file from `journal_dir`, replays it into a
 /// fresh domain::ShardEngine built from `router`/`shard_count`/`policy`, and
 /// returns its digest (app::digest) over every event, reply and final book
-/// snapshot. A torn tail at the very end is reported in the result and
-/// otherwise treated as end of input; any other journal error (missing file,
-/// corrupt, version or config mismatch) is returned as a message naming the
-/// file.
+/// snapshot. A torn tail - a crash mid-write, cut at the last complete
+/// record the same way recover_tail cuts it - is reported in the result and
+/// otherwise treated as end of input, even when it tears the very first
+/// record (zero commands is a legitimate result, task 010 review m4); a
+/// file shorter than the journal header is the one case that is still an
+/// error, since there is no header to even start reading from. Any other
+/// journal error (missing file, corrupt, version or config mismatch) is
+/// returned as a message naming the file.
 [[nodiscard]] std::expected<ShardDigestResult, std::string> compute_shard_digest(
     const std::filesystem::path& journal_dir,
     const app::Router& router,

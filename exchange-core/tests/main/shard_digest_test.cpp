@@ -1,6 +1,9 @@
-// compute_shard_digest (shard_digest.hpp), shared by lockstep-replay and
-// --print-digest-on-exit: a torn tail is reported and treated as end of
-// input (acceptance criterion 6), any other journal error is an error.
+// compute_shard_digest (shard_digest.hpp), the from-disk oracle lockstep-
+// replay and the determinism tests compare a live run's digest against
+// (task 010 review M1/F1): a torn tail - including one on the very first
+// record - is reported and treated as end of input (acceptance criterion
+// 6, task 010 review m4), a file shorter than the journal header is an
+// error, and so is any other journal error.
 #include "shard_digest.hpp"
 
 #include <cstdint>
@@ -112,14 +115,19 @@ TEST_F(ShardDigestTest, FileShorterThanTheHeaderIsAnError) {
     EXPECT_FALSE(result.has_value());
 }
 
-// Task 010 review F5: a Truncated error before any record was read (torn
-// right after a complete header) is also an error, consistent with
-// exchange-core startup's own recover_for_restart refusing the same case.
-TEST_F(ShardDigestTest, TruncatedBeforeAnyRecordIsAnError) {
+// Task 010 review m4 (supersedes F5's TruncatedBeforeAnyRecordIsAnError): a
+// torn *first* record is not special - it is the same "crash mid-write" a
+// torn tail anywhere else is, and recover_tail (the path exchange-core's
+// own startup takes) cuts it the same way. The file is at least
+// header-sized here, so there is nothing wrong with the file itself, only
+// with its last (here, only) record: benign, torn_tail=true, 0 commands.
+TEST_F(ShardDigestTest, TornFirstRecordIsBenignWithZeroCommands) {
     fs::resize_file(path(), journal::file_header_size + 3);  // header + a few stray bytes
     const auto result =
         compute_shard_digest(dir(), router_, ShardId{0}, shard_count, RiskLinkPolicy::FailOpen);
-    EXPECT_FALSE(result.has_value());
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_TRUE(result->torn_tail);
+    EXPECT_EQ(result->line.commands, 0U);
 }
 
 // Task 010 review F3: sequence numbers must start at 1 and increase by
@@ -184,6 +192,58 @@ TEST_F(ShardDigestTest, ValidateAcceptsACompleteSetOfShardJournals) {
 
 TEST_F(ShardDigestTest, ValidateAcceptsANonExistentDirectory) {
     EXPECT_TRUE(validate_journal_dir(dir() / "does-not-exist-yet", shard_count).has_value());
+}
+
+// Task 010 review m3: a file only counts as present if its name is exactly
+// FileJournalWriter::file_name(id) - "shard-00.jnl" parses to shard 0, but
+// is not the name create() or open_for_append() ever write, so treating it
+// as shard 0's journal would silently accept a file nothing in this
+// codebase produced.
+TEST_F(ShardDigestTest, ValidateRefusesANonCanonicalFilename) {
+    std::ofstream{dir() / "shard-00.jnl"} << "not a real journal";
+    const auto result = validate_journal_dir(dir(), shard_count);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("shard-00.jnl"), std::string::npos) << result.error();
+}
+
+// Task 010 review m3: a shard-*.jnl file whose digits don't even parse as an
+// unsigned integer must be refused, naming it, not silently ignored as "not
+// ours to judge".
+TEST_F(ShardDigestTest, ValidateRefusesAnUnparsableFilename) {
+    std::ofstream{dir() / "shard-abc.jnl"} << "not a real journal";
+    const auto result = validate_journal_dir(dir(), shard_count);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("shard-abc.jnl"), std::string::npos) << result.error();
+}
+
+// Task 010 review m3: digits that parse but overflow std::uint32_t must be
+// refused explicitly, not left to from_chars' result_out_of_range being
+// mistaken for "doesn't parse, ignore it".
+TEST_F(ShardDigestTest, ValidateRefusesAnOverflowingShardId) {
+    std::ofstream{dir() / "shard-99999999999.jnl"} << "not a real journal";
+    const auto result = validate_journal_dir(dir(), shard_count);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("shard-99999999999.jnl"), std::string::npos) << result.error();
+}
+
+// Task 010 review m3: a directory_iterator error (e.g. a directory that
+// becomes unreadable mid-listing) must be reported, not silently stop the
+// listing early and report "looks fine" on whatever was seen before it.
+TEST_F(ShardDigestTest, ValidateReportsADirectoryIteratorError) {
+    // Root bypasses the DAC permission check this test relies on to make
+    // directory_iterator fail, so there is nothing for it to catch here;
+    // the production fix (returning the error instead of silently
+    // `break`-ing out of the loop) is still exercised by any non-root run,
+    // including CI.
+    if (::geteuid() == 0) {
+        GTEST_SKIP() << "root bypasses the permission check this test needs";
+    }
+    // Not world/owner-readable: directory_iterator fails to open it.
+    fs::permissions(dir(), fs::perms::none);
+    const auto result = validate_journal_dir(dir(), shard_count);
+    fs::permissions(dir(), fs::perms::owner_all);  // TearDown must still be able to remove it
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find(dir().string()), std::string::npos) << result.error();
 }
 
 }  // namespace

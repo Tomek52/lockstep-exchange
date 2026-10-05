@@ -31,6 +31,21 @@ std::expected<ShardDigestResult, std::string> compute_shard_digest(
     const journal::ReaderExpectations expect{
         .shard = shard, .shard_count = shard_count, .config_hash = journal::config_hash(config)};
 
+    // Task 010 review m4: read_journal reports "truncated right after the
+    // header" (a file shorter than FileHeader) and "truncated right after
+    // the header, mid-first-record" identically (both are JournalError::
+    // Truncated with no record read), so the two cases are told apart here,
+    // up front, by size alone - the only thing that actually distinguishes
+    // them.
+    std::error_code size_ec;
+    const auto file_size = std::filesystem::file_size(path, size_ec);
+    if (size_ec) {
+        return std::unexpected(path.string() + ": " + size_ec.message());
+    }
+    if (file_size < journal::file_header_size) {
+        return std::unexpected(path.string() + ": file is shorter than the journal header");
+    }
+
     domain::ShardEngine engine{config};
     app::ReplayOutput output;
     domain::EventBuffer buffer;
@@ -43,12 +58,14 @@ std::expected<ShardDigestResult, std::string> compute_shard_digest(
 
     for (auto&& record : journal::read_journal(path, expect)) {
         if (!record) {
-            // A torn tail is only a benign "stop here" once at least one
-            // complete record was read; a file shorter than the header, or
-            // one truncated before its very first record, has nothing to
-            // report and is an error, consistent with exchange-core
-            // startup's own recover_for_restart refusing the same case.
-            if (record.error() == app::JournalError::Truncated && commands > 0) {
+            // The file-shorter-than-header case was already refused above;
+            // every other Truncated here - including one on the very first
+            // record - is a torn tail: a crash mid-write, cut at the last
+            // complete record, the same as recover_tail (exchange-core's
+            // own startup path) would cut it (task 010 review m4). Zero
+            // commands read is a legitimate outcome, not a reason to treat
+            // this one specially.
+            if (record.error() == app::JournalError::Truncated) {
                 torn_tail = true;
                 break;
             }
@@ -100,22 +117,38 @@ std::expected<void, std::string> validate_journal_dir(const std::filesystem::pat
     }
 
     std::vector<bool> present(shard_count, false);
-    for (const auto& entry : std::filesystem::directory_iterator{journal_dir, ec}) {
-        if (ec) {
-            break;
-        }
+    std::filesystem::directory_iterator it{journal_dir, ec};
+    const std::filesystem::directory_iterator end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const std::filesystem::directory_entry& entry = *it;
         const std::string filename = entry.path().filename().string();
         constexpr std::string_view prefix = "shard-";
         constexpr std::string_view suffix = ".jnl";
         if (!filename.starts_with(prefix) || !filename.ends_with(suffix)) {
-            continue;  // not a journal file; not this function's concern
+            continue;  // not shaped like a journal file; not this function's concern
         }
         const std::string_view digits = std::string_view{filename}.substr(
             prefix.size(), filename.size() - prefix.size() - suffix.size());
         std::uint32_t id{};
         const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), id);
-        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size()) {
-            continue;  // doesn't parse as "shard-<digits>.jnl"; not ours to judge
+        // Task 010 review m3: shaped like "shard-<digits>.jnl" is not enough
+        // - a file only counts as present if its name is the one
+        // FileJournalWriter::file_name(id) actually writes. Anything else
+        // that looks like a journal file (unparsable digits, an overflowing
+        // id, or a non-canonical spelling such as "shard-00.jnl") is
+        // refused by name rather than silently skipped: skipping it would
+        // hide that the directory holds a file nothing in this codebase
+        // produced, which is as much a mismatch as a wrong shard id is.
+        const bool unparsable =
+            parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size();
+        if (unparsable) {
+            return std::unexpected("journal: '" + entry.path().string() +
+                                   "' does not parse as shard-<digits>.jnl");
+        }
+        if (entry.path().filename() != journal::FileJournalWriter::file_name(domain::ShardId{id})) {
+            return std::unexpected("journal: '" + entry.path().string() +
+                                   "' is not the canonical journal file name for shard " +
+                                   std::to_string(id));
         }
         if (id >= shard_count) {
             return std::unexpected(
@@ -123,6 +156,9 @@ std::expected<void, std::string> validate_journal_dir(const std::filesystem::pat
                 ", outside this run's shard_count=" + std::to_string(shard_count));
         }
         present[id] = true;
+    }
+    if (ec) {
+        return std::unexpected("journal: '" + journal_dir.string() + "': " + ec.message());
     }
 
     const bool any_present = std::ranges::any_of(present, std::identity{});
