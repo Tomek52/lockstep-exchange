@@ -63,7 +63,8 @@ e2e script can then compare live and replayed digests.
      accepted (track them from completions);
    - occasional `BlockTrader`/`UnblockTrader`/`KillSwitch` broadcasts.
 
-   A fixed seed reproduces the same command *multiset*; the interleaving
+   A fixed seed reproduces the same command multiset except the target ids
+   of cancels and modifies, which come from completions; the interleaving
    still varies.
 2. **File journal round trip:** a live run with `FileJournalWriter` in a temp
    dir is replayed via `read_journal` → `replay`. Events, replies and book

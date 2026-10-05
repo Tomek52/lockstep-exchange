@@ -22,11 +22,18 @@ void AcceptedOrders::record(domain::OrderId id) {
 }
 
 std::optional<domain::OrderId> AcceptedOrders::sample(std::mt19937_64& rng) const {
+    // Drawn before the emptiness check, unconditionally, so this always
+    // consumes exactly one rng value - whether it does depends on timing
+    // (which producer's completions have landed so far), not on the seed
+    // alone (task 010 review F7); only the *result* (which id, if any) is
+    // allowed to vary with timing, not how many values the rest of this
+    // command's generation draws afterwards.
+    const std::uint64_t index_draw = rng();
     std::lock_guard lock{mutex_};
     if (ids_.empty()) {
         return std::nullopt;
     }
-    return ids_[rng() % ids_.size()];
+    return ids_[index_draw % ids_.size()];
 }
 
 domain::Command random_command(std::mt19937_64& rng,
@@ -103,6 +110,10 @@ std::optional<domain::Command> maybe_risk_command(std::mt19937_64& rng,
     if (roll(rng) != 0) {
         return std::nullopt;
     }
+    // relaxed: see ADR-0011. Every caller only needs a distinct value, not
+    // any ordering with other state - fetch_add's own atomicity is what
+    // keeps two producers from ever getting the same id, and nothing here
+    // publishes memory through this counter for another thread to read.
     const domain::RiskCommandId id{next_risk_command_id.fetch_add(1, std::memory_order_relaxed)};
     std::uniform_int_distribution<int> which{0, 2};
     switch (which(rng)) {
@@ -150,8 +161,15 @@ void run_workload(app::Engine& engine,
                 }
             };
             for (int i = 0; i < commands_per_producer; ++i) {
+                // Not value_or(random_command(...)): value_or's argument is
+                // a plain function call, evaluated eagerly whether or not
+                // the optional already holds a value, so random_command()
+                // would otherwise run (and draw from rng) on every
+                // iteration regardless of whether a risk command fired
+                // (task 010 review F7).
+                const std::optional<Command> risk_command = maybe_risk_command(rng, trader);
                 const Command command =
-                    maybe_risk_command(rng, trader).value_or(random_command(rng, trader, accepted));
+                    risk_command ? *risk_command : random_command(rng, trader, accepted);
                 // Retry only on back-pressure; any other refusal is a test bug
                 // and must fail loudly rather than spin forever.
                 for (;;) {

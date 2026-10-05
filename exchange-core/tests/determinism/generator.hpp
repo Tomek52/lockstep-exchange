@@ -2,10 +2,15 @@
 
 // Shared command generator for the determinism test suite (task 010,
 // acceptance criterion 1). A fixed seed given to random_command's rng
-// reproduces the same command *multiset* from one producer; several
-// producers racing against a live, multi-threaded engine still interleave
-// differently run to run; that is exactly the property ADR-0004 requires
-// replay to reproduce regardless of interleaving.
+// reproduces the same command multiset except the target ids of cancels
+// and modifies, which come from completions - themselves timing-dependent,
+// since they only arrive once the publisher thread has delivered the
+// matching accept (AcceptedOrders::sample, below, still draws exactly one
+// rng value either way, so only the *result* varies with timing, not the
+// rest of the command's shape). Several producers racing against a live,
+// multi-threaded engine also interleave differently run to run; that is
+// exactly the property ADR-0004 requires replay to reproduce regardless of
+// interleaving.
 #include <cstdint>
 #include <mutex>
 #include <optional>
