@@ -49,13 +49,13 @@ flowchart TB
         grpc["<b>grpc</b><br/>OrderEntryService<br/>MarketDataService (task 013)<br/>GrpcServer"]
         risk["<b>risk_client</b><br/>Monitor session<br/>→ broadcast risk commands"]
         codec["<b>codec</b><br/>proto ⇄ domain<br/>(fuzzed)"]
-        jrnl["<b>journal</b><br/>binary format, CRC32C, FileJournalWriter,<br/>MemoryJournal,<br/>FileJournalReader, recover_tail"]
+        jrnl["<b>journal</b><br/>binary format, CRC32C, FileJournalWriter,<br/>MemoryJournal,<br/>FileJournalReader, recover_tail,<br/>recover_for_restart (ADR-0020)"]
     end
 
     subgraph app["Application  (threads + queues, no I/O)"]
         direction LR
         ports["<b>ports</b><br/>CommandIngress · Journal<br/>Clock · EventSubscriber"]
-        runtime["<b>runtime</b><br/>Engine · Router<br/>ShardRuntime · Publisher<br/>replay()"]
+        runtime["<b>runtime</b><br/>Engine · Router<br/>ShardRuntime · Publisher<br/>replay() · digest() · DigestBuilder<br/>ResumeFactory (ADR-0020)"]
     end
 
     conc["<b>concurrency</b><br/>queue concepts, MPSC/SPSC,<br/>MutexQueue, idle strategies"]
@@ -99,3 +99,28 @@ flowchart TB
 | grpc | `lockstep::adapter_grpc` | app, codec, gRPC | review |
 | risk_client | `lockstep::adapter_risk` | app, codec, gRPC | review |
 | main | `exchange-core` | everything | – |
+
+**Startup / restart (ADR-0020, task 010).** Before `main` builds the
+`Engine`, it checks `--journal-dir` for a consistent set of shard journals
+(`validate_journal_dir`: no stray file for a shard id past `shard_count`, no
+partial set), then for each shard whose journal already exists:
+`recover_tail` cuts a torn tail, a header-validated `read_journal` reads it
+back (`recover_for_restart`), and the recovered records replay into that
+shard's engine via `Engine`'s `ResumeFactory` *before* any shard thread
+starts - not published, only state rebuild. The shard then reopens the same
+file to append (`FileJournalWriter::open_for_append`) and resumes sequence
+numbering where it stopped. A refused or inconsistent journal fails startup
+naming the file; nothing is deleted or truncated automatically. Right after
+`Engine::start()`, and before the gRPC server or risk client can reach it,
+each shard journals `RiskLinkStatus{connected=false}` as this run's own
+first command, so a resumed "link was up" state from before a crash cannot
+let `RiskLinkPolicy::FailClosed` treat the link as live with nothing
+connected.
+
+**lockstep-replay** (a separate `main` binary, not shown above) reads a
+journal directory the same way, with the same `Router::round_robin`
+assignment, and prints each shard's digest (`app::digest`, built on
+`DigestBuilder`) for offline verification; `--print-digest-on-exit` prints
+the equivalent from the live run's own `DigestBuilder` instead of re-reading
+the journal, so the two can be compared without one trivially reproducing
+the other.
