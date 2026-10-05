@@ -110,6 +110,22 @@ std::unique_ptr<FileJournalWriter> FileJournalWriter::create(const std::filesyst
     return writer;
 }
 
+std::unique_ptr<FileJournalWriter> FileJournalWriter::open_for_append(
+    const std::filesystem::path& dir, domain::ShardId shard, SyncPolicy policy) {
+    const std::filesystem::path path = dir / file_name(shard);
+    // O_APPEND: every write(2) atomically seeks to the current end of file
+    // first, so this writer never needs to track or restore a byte offset,
+    // and cannot clobber the recovered tail even if something else sized the
+    // file between recover_tail() and this open. No O_CREAT/O_EXCL: resuming
+    // an existing, already-recovered file (ADR-0020), never creating one.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): open(2) is variadic by POSIX
+    const int fd = ::open(path.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
+    if (fd < 0) {
+        throw_io("cannot reopen", path, errno);
+    }
+    return std::unique_ptr<FileJournalWriter>{new FileJournalWriter{fd, policy}};
+}
+
 FileJournalWriter::FileJournalWriter(int fd, SyncPolicy policy) noexcept
     : fd_{fd}, policy_{policy} {}
 

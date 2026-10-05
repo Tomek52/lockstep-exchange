@@ -49,6 +49,16 @@ public:
                                                                    const FileHeader& header,
                                                                    SyncPolicy policy);
 
+    /// Reopens `<dir>/shard-<id>.jnl` to append further records after it, for
+    /// resuming a shard whose journal already held commands (ADR-0020).
+    /// Precondition: the caller already ran recover_tail() on this file and
+    /// validated its header - this call does neither, it only opens the file
+    /// O_APPEND (no O_CREAT, no O_EXCL: the file must already exist and end at
+    /// a complete record). Throws std::runtime_error if the file cannot be
+    /// opened (ADR-0008).
+    [[nodiscard]] static std::unique_ptr<FileJournalWriter> open_for_append(
+        const std::filesystem::path& dir, domain::ShardId shard, SyncPolicy policy);
+
     /// The file name of shard `shard`'s journal inside a journal directory.
     [[nodiscard]] static std::filesystem::path file_name(domain::ShardId shard);
 
