@@ -33,6 +33,7 @@ std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& confi
                       .risk_link_policy = config.risk_link_policy},
             .ingress_capacity = config.ingress_capacity,
             .egress_capacity = config.egress_capacity,
+            .record_digest = config.record_digest,
         };
         auto& shard = shards.emplace_back(std::make_unique<ShardRuntime>(
             std::move(shard_config), journal_factory(id), clock, publisher_doorbell));

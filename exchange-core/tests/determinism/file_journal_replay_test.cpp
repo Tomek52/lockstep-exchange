@@ -148,7 +148,8 @@ TEST_F(FileJournalReplayTest, LiveDigestEqualsDiskReplayDigest) {
             journal::SyncPolicy::None);
     };
     app::Engine engine{
-        app::EngineConfig{.instruments = test::instruments(), .shard_count = shard_count},
+        app::EngineConfig{
+            .instruments = test::instruments(), .shard_count = shard_count, .record_digest = true},
         std::move(journal_factory), clock};
     test::run_workload(engine, subscriber, live_replies, /*producer_count=*/3,
                        /*commands_per_producer=*/300);
@@ -167,7 +168,8 @@ TEST_F(FileJournalReplayTest, LiveDigestEqualsDiskReplayDigest) {
             ASSERT_NE(book, nullptr);
             live_books.push_back(book->snapshot());
         }
-        const std::uint64_t live_digest = engine.shard(shard).digest_builder().finish(live_books);
+        ASSERT_TRUE(engine.shard(shard).digest_builder().has_value());
+        const std::uint64_t live_digest = engine.shard(shard).digest_builder()->finish(live_books);
 
         // From disk: read the journal back and replay it into a fresh
         // engine, the way lockstep-replay does.

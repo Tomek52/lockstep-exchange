@@ -94,6 +94,9 @@ int run(const main_app::Options& options) {
         throw std::runtime_error("config: " + engine_config.error());
     }
     app::EngineConfig config{std::move(*engine_config)};
+    // Only --print-digest-on-exit pays for digest folding (task 010 review
+    // M1): it costs ~180ns per resting NewOrder, ~45% of apply() itself.
+    config.record_digest = options.print_digest_on_exit;
     // One journal file per shard (ADR-0004). The header records the shard's
     // config so replay can refuse a journal recorded under another one
     // (ADR-0012, ADR-0017). The Engine builds its own Router from the same
@@ -255,7 +258,9 @@ int run(const main_app::Options& options) {
         for (std::uint32_t s = 0; s < shard_count_for_log; ++s) {
             const domain::ShardId shard{s};
             const app::ShardRuntime& shard_runtime = engine.shard(shard);
-            const app::DigestBuilder& builder = shard_runtime.digest_builder();
+            // config.record_digest was set above whenever this flag is, so
+            // every shard has one.
+            const app::DigestBuilder& builder = *shard_runtime.digest_builder();
             std::vector<domain::BookSnapshot> books;
             for (const domain::InstrumentSpec& spec : router.instruments_of(shard)) {
                 if (const domain::OrderBook* book = shard_runtime.engine().book(spec.id)) {

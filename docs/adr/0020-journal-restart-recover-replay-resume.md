@@ -82,20 +82,37 @@ re-reading from disk makes the check a replay-equals-replay tautology - it
 cannot catch a bug in how, or whether, the live run itself produced that
 state in the first place.
 
-The fix is `app::DigestBuilder`: each shard's `ShardRuntime` owns one and
+The fix is `app::DigestBuilder`: each shard's `ShardRuntime` can own one and
 folds into it incrementally - every record resumed in step 4 (not
 published, but still folded, in file order), then every command the live
 run processes, interleaved per command (that command's events, then its
-reply) in the exact order a from-disk replay would produce them. Only the
-shard thread writes it; `--print-digest-on-exit` reads it only after
-`Engine::stop()` has joined every shard thread, which is what makes the read
-safe without further synchronisation. `app::digest(ReplayOutput, books)` -
-what `lockstep-replay` uses - is implemented on top of the same
-`DigestBuilder`, so the two can never fold their output differently by
-accident; aligning them this way also surfaced and fixed a second bug, where
-`digest()` had folded all events before all replies instead of interleaving
-per command. Memory stays bounded (one running hash and two counters per
-shard, not the growing output vectors a from-disk replay builds).
+reply) in the exact order a from-disk replay would produce them. The owner
+thread writes it via `resume_from_journal()`, before any shard thread
+exists; from then on only the shard thread writes it, via `process()`; a
+std::jthread's construction happens-after everything its starting thread
+did beforehand, so the owner thread's writes are visible to the shard
+thread without further synchronisation, and `--print-digest-on-exit` reads
+it only after `Engine::stop()` has joined the shard thread, for the same
+reason in reverse. `app::digest(ReplayOutput, books)` - what
+`lockstep-replay` uses - is implemented on top of the same `DigestBuilder`,
+so the two can never fold their output differently by accident; aligning
+them this way also surfaced and fixed a second bug, where `digest()` had
+folded all events before all replies instead of interleaving per command.
+Memory stays bounded (one running hash and two counters per shard, not the
+growing output vectors a from-disk replay builds).
+
+**Folding is opt-in** (`EngineConfig::record_digest`, `ShardRuntime::
+Config::record_digest`; `ShardRuntime::digest_builder()` returns
+`std::optional<DigestBuilder>`, `nullopt` when disabled). Measured on this
+machine at roughly 180ns per resting `NewOrder` when enabled - about 45% of
+`apply()` itself - which is not something every run should pay for a
+feature most runs never ask for. `main.cpp` enables it only when
+`--print-digest-on-exit` is passed; tests that need the digest enable it
+explicitly. Resuming into a shard with digest recording enabled still folds
+every resumed record (the `if (digest_)` guard is inside
+`resume_from_journal()`, not around the call to it), so a restart with
+`--print-digest-on-exit` still reports the whole journal's digest, not just
+what this run appended.
 
 ## Alternatives considered
 
