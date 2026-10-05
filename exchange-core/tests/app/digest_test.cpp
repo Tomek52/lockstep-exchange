@@ -355,11 +355,62 @@ TEST(Digest, EveryFieldChangesTheDigest) {
 }
 
 // Pinned golden value: any unintended change to the canonical encoding
-// (field order, byte width, count placement) changes this and must be
-// treated as a digest format change, not quietly updated.
+// (field order, byte width, count placement, the item-type tag added by
+// task 010 review n1) changes this and must be treated as a digest format
+// change, not quietly updated.
 TEST(Digest, GoldenValueForAFixedSmallInput) {
     const Fixture f = field_coverage_fixture();
-    EXPECT_EQ(digest(f.output, f.books), 0x55CB'F564'27EE'EEF1ULL);
+    EXPECT_EQ(digest(f.output, f.books), 0x2878'E18D'EF41'EAC1ULL);
+}
+
+// Task 010 review n1: DigestBuilder::add() folds a byte saying "event" or
+// "reply" before the item's own fields, specifically so an event and a
+// reply can never serialize to the same bytes regardless of field values.
+//
+// A reproducible collision between a *single* event and a *single* reply
+// is not constructible with today's event/reply set: every event and reply
+// variant serializes to a fixed total length (shard+sequence+timestamp,
+// then a kind/outcome byte, then that variant's own fields, all fixed-
+// width - no variable-length encoding anywhere), and the one case where
+// two variants' lengths coincide is exercised below: a RiskCommandApplied
+// event and an ok CommandReply both serialize to 33 bytes (24-byte prefix
+// + 1 tag byte + one 8-byte field). Even there, EventKind::RiskCommandApplied's
+// byte_of() value (6) and the "ok" byte (0) already differ, so the two
+// could never collide even before this item-type tag existed - this test
+// pins that the two remain distinguishable now that an outer tag byte
+// (task 010 review n1's digest_item_event_tag/digest_item_reply_tag, folded
+// before each item's own kind/outcome byte) also sits between them.
+//
+// What the per-add() tag actually defends against is a future event or
+// reply variant landing on a length that *does* line up with another
+// item's total length *and* reuses kind/outcome byte 0 or 1 (EventKind's
+// own values already run 0-6, overlapping CommandResult's ok=0/rejected=1):
+// without an outer tag, that one coincidence would be enough to make an
+// event indistinguishable from a reply at the type level, not just a
+// collision between unlucky field values within one type. No such variant
+// exists today, so this is forward defence, not a fix for an exploitable
+// bug - this test and comment are the record of that check, since the
+// collision itself cannot be demonstrated against the current, smaller set
+// of variants.
+TEST(Digest, ItemTypeTagKeepsALengthMatchedEventAndReplyApart) {
+    const PublishedEvent risk_event{.shard = ShardId{0},
+                                    .sequence = SequenceNumber{1},
+                                    .timestamp = Timestamp{100},
+                                    .event = RiskCommandApplied{.command_id = RiskCommandId{7}}};
+    const CommandReply ok_reply_same_shape{.shard = ShardId{0},
+                                           .sequence = SequenceNumber{1},
+                                           .timestamp = Timestamp{100},
+                                           .result = CommandOutcome{.order_id = OrderId{7}}};
+
+    ReplayOutput event_only;
+    event_only.events.push_back(risk_event);
+    ReplayOutput reply_only;
+    reply_only.replies.push_back(ok_reply_same_shape);
+
+    EXPECT_NE(digest(event_only, {}), digest(reply_only, {}))
+        << "a RiskCommandApplied event and an ok CommandReply with the same "
+        << "shard/sequence/timestamp/id must never produce the same digest, "
+        << "even though both serialize to the same 33 bytes";
 }
 
 TEST(Digest, ChangesWhenBookCountChangesEvenIfBytesCoincide) {

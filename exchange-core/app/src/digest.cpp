@@ -37,6 +37,22 @@ template <std::integral T>
 // enumerators' C++ values: reordering an enum in events.hpp/types.hpp/
 // reject_reason.hpp cannot silently change an existing digest.
 
+// Task 010 review n1: one byte per add(), folded before the item's own
+// content, so an event and a reply can never serialize to the same bytes
+// regardless of their field values - without it, RiskCommandApplied (kind
+// byte 6, 8 bytes of command_id) and an ok CommandReply (ok byte 0, 8 bytes
+// of order_id) already serialize to the same *length* (33 bytes including
+// the shared shard/sequence/timestamp prefix), so a future event or reply
+// variant that also lands on 33 bytes with a kind/outcome byte of 0 or 1
+// would collide with an ok/rejected reply at the type level, not just by
+// unlucky field values. These values are a separate namespace from
+// EventKind's and CommandResult's own tag bytes (which only ever
+// distinguish within one item type): 2 and 3 are deliberately clear of
+// byte_of(EventKind)'s 0-6 and digest_result's 0-1, so this tag and an
+// item's own internal tag can never be mistaken for each other either.
+inline constexpr std::uint8_t digest_item_event_tag = 2;
+inline constexpr std::uint8_t digest_item_reply_tag = 3;
+
 [[nodiscard]] constexpr std::uint8_t byte_of(domain::EventKind kind) noexcept {
     switch (kind) {
         case domain::EventKind::OrderAccepted:
@@ -239,11 +255,13 @@ std::uint64_t digest_book(std::uint64_t hash, const domain::BookSnapshot& book) 
 DigestBuilder::DigestBuilder() noexcept : hash_{fnv1a_offset_basis} {}
 
 void DigestBuilder::add(const PublishedEvent& event) {
+    hash_ = fnv1a_le(hash_, digest_item_event_tag);
     hash_ = digest_published_event(hash_, event);
     ++event_count_;
 }
 
 void DigestBuilder::add(const CommandReply& reply) noexcept {
+    hash_ = fnv1a_le(hash_, digest_item_reply_tag);
     hash_ = digest_reply(hash_, reply);
     ++reply_count_;
 }

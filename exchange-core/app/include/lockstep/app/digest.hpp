@@ -32,8 +32,14 @@ namespace lockstep::app {
 /// field is written out little-endian, one at a time, in declaration order,
 /// never by copying a struct's raw bytes. Enum and bool fields use explicit
 /// byte values, not the C++ enumerator, so reordering an enum cannot change
-/// the digest. `digest()` below is built on top of this class, so a file
-/// replay and a live run can never fold their output differently.
+/// the digest. Every add() also folds a byte saying which overload it is
+/// (event or reply) before the item's own fields (task 010 review n1): two
+/// item types can otherwise serialize to the same total length (an ok
+/// CommandReply and a RiskCommandApplied event both do, at 33 bytes), so
+/// without this an event and a reply could one day collide at the type
+/// level, not just by unlucky field values. `digest()` below is built on
+/// top of this class, so a file replay and a live run can never fold their
+/// output differently.
 class DigestBuilder {
 public:
     DigestBuilder() noexcept;
