@@ -2,12 +2,11 @@
 // run happened to take, replaying each shard's journal into a fresh ShardEngine
 // must reproduce that shard's events, replies and book state exactly.
 //
-// SKELETON STATUS: the generator only sends NewOrder/CancelOrder, so the
-// event stream now includes fills and rests (task 002 matches) alongside
-// rejections, but no modifies or risk commands yet. Task 010 extends the
-// generator further and adds file-journal round trips; the structure of the
-// property stays the same.
-#include <algorithm>
+// The generator (generator.hpp, acceptance criterion 1) covers matching
+// (crossing limits, market, IOC), cancels/modifies against real accepted
+// ids, occasional risk broadcasts, and occasional invalid/duplicate
+// commands - every one of those is journaled, including rejections, and
+// replay must reproduce it identically.
 #include <cstdint>
 #include <map>
 #include <random>
@@ -21,6 +20,7 @@
 #include "lockstep/app/replay.hpp"
 
 #include "app/test_support.hpp"
+#include "generator.hpp"
 
 namespace lockstep {
 namespace {
@@ -28,36 +28,7 @@ namespace {
 using namespace domain;
 
 constexpr std::size_t shard_count = 2;
-constexpr std::uint32_t instrument_count = 4;
-
-std::vector<InstrumentSpec> instruments() {
-    return std::views::iota(1U, instrument_count + 1) | std::views::transform([](std::uint32_t id) {
-               return InstrumentSpec{.id = InstrumentId{id}};
-           }) |
-           std::ranges::to<std::vector>();
-}
-
-Command random_command(std::mt19937_64& rng) {
-    // Only listed instruments: an unknown one is refused by submit() before it
-    // reaches a shard (nothing to replay), which the pipeline tests cover.
-    std::uniform_int_distribution<std::uint32_t> instrument{1, instrument_count};
-    std::uniform_int_distribution<std::int64_t> price{0, 120};  // 0: domain rejects (journaled)
-    std::uniform_int_distribution<std::uint64_t> qty{0, 50};    // 0: domain rejects (journaled)
-    std::uniform_int_distribution<int> kind{0, 9};
-
-    const InstrumentId target{instrument(rng)};
-    if (kind(rng) == 0) {
-        return CancelOrder{TraderId{rng() % 5}, target, OrderId{rng() % 64}};
-    }
-    return NewOrder{.trader = TraderId{rng() % 5},
-                    .client_order_id = ClientOrderId{rng()},
-                    .instrument = target,
-                    .side = (rng() % 2 == 0) ? Side::Buy : Side::Sell,
-                    .type = OrderType::Limit,
-                    .time_in_force = TimeInForce::Gtc,
-                    .price = Price{price(rng)},
-                    .quantity = Quantity{qty(rng)}};
-}
+constexpr int commands_per_producer = 2'000;
 
 TEST(ReplayDeterminism, JournalReplayReproducesLiveOutputPerShard) {
     app::ManualClock clock;
@@ -66,27 +37,47 @@ TEST(ReplayDeterminism, JournalReplayReproducesLiveOutputPerShard) {
     std::vector<app::CommandReply> live_replies;  // written only on the publisher thread
 
     // The engine owns the journals, so it must outlive the comparison below.
-    app::Engine engine{app::EngineConfig{.instruments = instruments(), .shard_count = shard_count},
-                       journals.factory(), clock};
+    app::Engine engine{
+        app::EngineConfig{.instruments = test::instruments(), .shard_count = shard_count},
+        journals.factory(), clock};
     engine.add_subscriber(subscriber);
     engine.start();
 
     // Several producers race: the interleaving differs from run to run,
-    // which is exactly what the journal must capture.
+    // which is exactly what the journal must capture. Each has its own
+    // trader id and its own view of the orders it has seen accepted - kept
+    // here, not inside the producer lambda: a completion can still be
+    // in flight on the publisher thread after producers.clear() joins the
+    // producer threads below (joining only proves they stopped submitting,
+    // not that every reply was delivered yet), so anything a completion
+    // touches must outlive that join.
+    constexpr std::uint64_t producer_count = 3;
+    std::vector<test::AcceptedOrders> accepted_per_producer{producer_count};
     std::vector<std::jthread> producers;
-    for (std::uint64_t seed = 1; seed <= 3; ++seed) {
-        producers.emplace_back([&engine, &live_replies, seed] {
+    for (std::uint64_t seed = 1; seed <= producer_count; ++seed) {
+        producers.emplace_back([&engine, &live_replies, &accepted_per_producer, seed] {
             std::mt19937_64 rng{seed};
+            const TraderId trader{seed};
+            test::AcceptedOrders& accepted = accepted_per_producer[seed - 1];
             // Copyable, so every (re)submission gets a fresh Completion.
-            const auto record = [&live_replies](const app::CommandReply& reply) noexcept {
+            const auto record = [&live_replies, &accepted](const app::CommandReply& reply) noexcept {
                 live_replies.push_back(reply);
+                if (reply.result.has_value() && reply.result->order_id.value() != 0) {
+                    accepted.record(reply.result->order_id);
+                }
             };
-            for (int i = 0; i < 2'000; ++i) {
-                const Command command = random_command(rng);
+            for (int i = 0; i < commands_per_producer; ++i) {
+                const Command command =
+                    test::maybe_risk_command(rng, trader).value_or(test::random_command(rng, trader, accepted));
                 // Retry only on back-pressure; any other refusal is a test bug
                 // and must fail loudly rather than spin forever.
                 for (;;) {
-                    const auto submitted = engine.submit(command, record);
+                    const auto submitted =
+                        std::holds_alternative<BlockTrader>(command) ||
+                                std::holds_alternative<UnblockTrader>(command) ||
+                                std::holds_alternative<KillSwitch>(command)
+                            ? engine.broadcast(command)
+                            : engine.submit(command, record);
                     if (submitted || submitted.error() != app::SubmitError::Overloaded) {
                         EXPECT_TRUE(submitted.has_value()) << app::to_string(submitted.error());
                         break;
@@ -97,7 +88,7 @@ TEST(ReplayDeterminism, JournalReplayReproducesLiveOutputPerShard) {
         });
     }
     producers.clear();  // join producers, then drain the engine
-    ASSERT_TRUE(engine.broadcast(KillSwitch{RiskCommandId{1}, true}).has_value());
+    ASSERT_TRUE(engine.broadcast(KillSwitch{RiskCommandId{1'000'000}, true}).has_value());
     engine.stop();
 
     for (std::uint32_t s = 0; s < shard_count; ++s) {
@@ -106,7 +97,7 @@ TEST(ReplayDeterminism, JournalReplayReproducesLiveOutputPerShard) {
         ASSERT_FALSE(commands.empty());
 
         // Replay into a fresh engine configured exactly like the live shard.
-        const app::Router router = app::Router::round_robin(instruments(), shard_count);
+        const app::Router router = app::Router::round_robin(test::instruments(), shard_count);
         const auto owned = router.instruments_of(shard);
         ShardEngine fresh{ShardConfig{.shard = shard, .instruments = {owned.begin(), owned.end()}}};
         const app::ReplayOutput replayed = app::replay(fresh, commands);
@@ -119,6 +110,8 @@ TEST(ReplayDeterminism, JournalReplayReproducesLiveOutputPerShard) {
             live_replies | std::views::filter([&](const auto& r) { return r.shard == shard; }) |
             std::ranges::to<std::vector>();
 
+        // Full vector equality, not just counts/digests: the first mismatch
+        // is reported at its exact shard sequence number.
         EXPECT_EQ(replayed.events.size(), live_events.size());
         for (const auto& [live, again] : std::views::zip(live_events, replayed.events)) {
             ASSERT_EQ(live, again)
@@ -132,6 +125,19 @@ TEST(ReplayDeterminism, JournalReplayReproducesLiveOutputPerShard) {
         }
         for (const auto& reply : live_shard_replies) {
             ASSERT_EQ(replayed_by_seq.at(reply.sequence.value()), reply);
+        }
+
+        // Final book state must agree too (acceptance criterion 2's "events,
+        // replies and book snapshots are identical" applies here as well,
+        // since the live engine is still inspectable before Engine's
+        // destructor runs).
+        for (const InstrumentSpec& spec : owned) {
+            const OrderBook* live_book = engine.shard(shard).engine().book(spec.id);
+            const OrderBook* replayed_book = fresh.book(spec.id);
+            ASSERT_NE(live_book, nullptr);
+            ASSERT_NE(replayed_book, nullptr);
+            EXPECT_EQ(live_book->snapshot(), replayed_book->snapshot())
+                << "instrument " << spec.id.value();
         }
     }
 }

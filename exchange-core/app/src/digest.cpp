@@ -172,9 +172,14 @@ std::uint64_t digest_fields(std::uint64_t hash, const domain::RiskCommandApplied
     return fnv1a_le(hash, e.command_id.value());
 }
 
-std::uint64_t digest_event(std::uint64_t hash, const domain::Event& event) noexcept {
+// Not noexcept, unlike its digest_fields helpers: std::visit's own dispatch
+// can throw std::bad_variant_access on a valueless_by_exception variant, a
+// state Event (trivially copyable, ADR-0004) never reaches, but clang-tidy's
+// bugprone-exception-escape cannot see through std::visit's implementation
+// to know that.
+std::uint64_t digest_event(std::uint64_t hash, const domain::Event& event) {
     return std::visit(
-        [hash](const auto& alternative) {
+        [hash](const auto& alternative) noexcept {
             std::uint64_t h = fnv1a_le(hash, byte_of(alternative.kind));
             return digest_fields(h, alternative);
         },
@@ -190,7 +195,8 @@ std::uint64_t digest_result(std::uint64_t hash, const domain::CommandResult& res
     return fnv1a_le(hash, byte_of(result.error()));
 }
 
-std::uint64_t digest_published_event(std::uint64_t hash, const PublishedEvent& published) noexcept {
+// Not noexcept: see digest_event's comment above, which this calls.
+std::uint64_t digest_published_event(std::uint64_t hash, const PublishedEvent& published) {
     hash = fnv1a_le(hash, published.shard.value());
     hash = fnv1a_le(hash, published.sequence.value());
     hash = fnv1a_le(hash, published.timestamp.value());

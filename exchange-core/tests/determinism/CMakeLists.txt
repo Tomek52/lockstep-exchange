@@ -2,5 +2,6 @@
 lockstep_add_test(lockstep_determinism_tests
   LABELS determinism
   SOURCES
+    generator.cpp
     replay_determinism_test.cpp
   LINK lockstep::app lockstep::journal)
