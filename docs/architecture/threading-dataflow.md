@@ -259,6 +259,52 @@ Signals are blocked in every thread (`pthread_sigmask` before any thread
 starts) and consumed synchronously by `sigwait` in `main`. No asynchronous
 signal handler ever runs concurrently with the runtime.
 
+## Startup and restart (ADR-0020, task 010)
+
+Before any shard or publisher thread exists, `main` (the owner thread)
+validates `--journal-dir` (`validate_journal_dir`: no stray file for a
+shard id at or past `shard_count`, no partial set of shards) and, for each
+shard whose journal file already exists, recovers it
+(`recover_for_restart`: `recover_tail` cuts a torn tail; a header mismatch
+or anything `recover_tail` refuses stops startup naming the file). The
+recovered records are handed to `Engine`'s `ResumeFactory`, which
+`ShardRuntime::resume_from_journal()` replays into that shard's
+`ShardEngine` - still on the owner thread, still before `start()` creates
+any `std::jthread` - so there is nothing to synchronise here: the same
+single-writer rule that governs the running engine is trivially true while
+only one thread exists at all. When digest recording is enabled (it is
+opt-in: `EngineConfig::record_digest`, set by `--print-digest-on-exit`, see
+ADR-0020), `resume_from_journal()` also folds each replayed record's events and reply into the shard's `DigestBuilder`
+(without publishing them - they already reached their original recipients
+in the run that produced them), in file order, so it ends up in exactly the
+state a from-disk replay of the file so far would reach.
+
+Once shard threads start, the only new writer each enabled `DigestBuilder` ever
+gets is its own shard thread, in the same place events/replies already
+get staged for egress (`ShardRuntime::process`). `main` reads it only
+after `Engine::stop()` has joined every shard thread; joining a
+`std::jthread` happens-before the joining thread's subsequent reads of
+whatever that thread wrote, so this read needs no atomics of its own
+(see `DigestBuilder`'s own doc comment, `app/include/lockstep/app/digest.hpp`).
+
+`main` passes `RiskLinkStatus{connected=false}` to `Engine::start()` as a
+startup command: `start()` pushes it into every shard's ingress before any
+shard thread exists and before `submit()`/`broadcast()` admit anything, so
+it is structurally this run's first live command on every shard, whether
+or not anything was just resumed, so a stale "connected" state a crash
+left behind cannot let `RiskLinkPolicy::FailClosed` treat the link as live
+with nothing actually connected.
+
+`lockstep-replay` (a separate binary) and `--print-digest-on-exit` both
+print a shard's digest, but take different paths to it on purpose:
+`lockstep-replay` always reads the file from disk end to end (`read_journal`
+→ a fresh `ShardEngine` → `app::digest`, itself built on `DigestBuilder`);
+`--print-digest-on-exit` reads the live run's own, already-populated
+`DigestBuilder` per shard. The two must still agree bit for bit over the
+same journal directory - that is what proves the live run actually
+produced what ended up on disk, rather than the comparison trivially
+reproducing itself.
+
 ## Memory-ordering map
 
 | Atomic | Location | Ordering | Why |

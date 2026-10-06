@@ -43,11 +43,29 @@ class FileJournalWriter final : public app::Journal {
 public:
     /// Creates `<dir>/shard-<id>.jnl` and writes `header`. Throws
     /// std::runtime_error if `dir` does not exist or the file already exists
-    /// (a startup error, ADR-0008). Opening an existing journal to append needs
-    /// recover_tail() first and is task 010.
+    /// (a startup error, ADR-0008). Opening an existing journal to append is
+    /// open_for_append() below, after recover_tail() (ADR-0020).
     [[nodiscard]] static std::unique_ptr<FileJournalWriter> create(const std::filesystem::path& dir,
                                                                    const FileHeader& header,
                                                                    SyncPolicy policy);
+
+    /// Reopens `<dir>/shard-<id>.jnl` to append further records after it, for
+    /// resuming a shard whose journal already held commands (ADR-0020).
+    /// Precondition: the caller already ran recover_tail() on this file and
+    /// validated its header - this call does neither, it only opens the file
+    /// O_APPEND (no O_CREAT, no O_EXCL: the file must already exist and end at
+    /// a complete record). Throws std::runtime_error if the file cannot be
+    /// opened (ADR-0008).
+    ///
+    /// Does not touch or re-check the file's permission bits: open() neither
+    /// changes them nor reports them, and this layer's architecture rule
+    /// (ADR-0002) only allows project and slash-free standard headers, which
+    /// excludes `<sys/stat.h>` (fstat) needed to verify them here. create()
+    /// always makes a journal owner-only (`0600`); a journal this reopens
+    /// keeps whatever mode it already has, including one changed outside the
+    /// exchange after create() made it.
+    [[nodiscard]] static std::unique_ptr<FileJournalWriter> open_for_append(
+        const std::filesystem::path& dir, domain::ShardId shard, SyncPolicy policy);
 
     /// The file name of shard `shard`'s journal inside a journal directory.
     [[nodiscard]] static std::filesystem::path file_name(domain::ShardId shard);

@@ -268,5 +268,25 @@ TEST(ShardPublisherBackpressure, BatchExceedingEgressCapacityStillDrains) {
     }
 }
 
+// Task 010 review M1: digest recording costs ~45% of apply() itself, so it
+// stays opt-in (EngineConfig::record_digest), off by default.
+TEST(DigestOptIn, DisabledByDefault) {
+    ManualClock clock;
+    test::MemoryJournals journals;
+    Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}}, .shard_count = 1},
+                  journals.factory(), clock};
+    EXPECT_FALSE(engine.shard(ShardId{0}).digest_builder().has_value());
+}
+
+TEST(DigestOptIn, PresentWhenEnabled) {
+    ManualClock clock;
+    test::MemoryJournals journals;
+    Engine engine{
+        EngineConfig{
+            .instruments = {{.id = InstrumentId{1}}}, .shard_count = 1, .record_digest = true},
+        journals.factory(), clock};
+    ASSERT_TRUE(engine.shard(ShardId{0}).digest_builder().has_value());
+}
+
 }  // namespace
 }  // namespace lockstep::app

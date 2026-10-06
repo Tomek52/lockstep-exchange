@@ -191,6 +191,71 @@ TEST_F(FileJournalWriterTest, EmptyCommitWritesNothing) {
     EXPECT_EQ(fs::file_size(dir() / "shard-1.jnl"), file_header_size);
 }
 
+// Acceptance criterion 5 / ADR-0020: resuming a journal reopens the same
+// file for appending, instead of refusing it like create() does.
+TEST_F(FileJournalWriterTest, OpenForAppendWritesAfterExistingRecords) {
+    {
+        const auto writer = FileJournalWriter::create(dir(), header, SyncPolicy::EveryCommit);
+        for (std::uint64_t i = 0; i < 5; ++i) {
+            ASSERT_TRUE(writer->append(sequenced(i)).has_value());
+        }
+        ASSERT_TRUE(writer->commit().has_value());
+    }
+    const auto size_before_reopen = fs::file_size(dir() / "shard-1.jnl");
+
+    {
+        const auto writer =
+            FileJournalWriter::open_for_append(dir(), header.shard, SyncPolicy::EveryCommit);
+        for (std::uint64_t i = 5; i < 8; ++i) {
+            ASSERT_TRUE(writer->append(sequenced(i)).has_value());
+        }
+        ASSERT_TRUE(writer->commit().has_value());
+    }
+
+    const auto contents = read_file(dir() / "shard-1.jnl");
+    EXPECT_GT(contents.size(), size_before_reopen);
+    const std::span<const std::byte> file{contents};
+    EXPECT_EQ(decode_file_header(file).value(), header);
+
+    std::size_t offset = file_header_size;
+    for (std::uint64_t i = 0; i < 8; ++i) {
+        ASSERT_LE(offset + record_header_size, file.size());
+        const RecordHeader record =
+            decode_record_header(file.subspan(offset).first<record_header_size>());
+        offset += record_header_size;
+        ASSERT_LE(offset + record.payload_size, file.size());
+        const auto payload = file.subspan(offset, record.payload_size);
+        EXPECT_EQ(decode_payload(payload).value(), sequenced(i)) << "record " << i;
+        offset += record.payload_size;
+    }
+    EXPECT_EQ(offset, file.size());
+}
+
+TEST_F(FileJournalWriterTest, OpenForAppendThrowsWhenFileIsMissing) {
+    EXPECT_THROW((void)FileJournalWriter::open_for_append(dir(), header.shard, SyncPolicy::None),
+                 std::runtime_error);
+}
+
+// Task 010 review F8: open_for_append does not verify or restore the file's
+// permission bits (the architecture rule for this layer excludes
+// <sys/stat.h>/fstat - see open_for_append's doc comment) - it keeps
+// whatever mode the file already has, even one changed outside the exchange
+// after create() made it owner-only.
+TEST_F(FileJournalWriterTest, OpenForAppendKeepsWhateverModeTheFileAlreadyHas) {
+    {
+        const auto writer = FileJournalWriter::create(dir(), header, SyncPolicy::None);
+    }
+    const auto path = dir() / "shard-1.jnl";
+    ASSERT_EQ(::chmod(path.c_str(), S_IRUSR | S_IWUSR | S_IRGRP), 0);
+
+    const auto writer = FileJournalWriter::open_for_append(dir(), header.shard, SyncPolicy::None);
+    struct stat info{};
+    ASSERT_EQ(::stat(path.c_str(), &info), 0);
+    EXPECT_EQ(info.st_mode & 0777U, static_cast<unsigned>(S_IRUSR | S_IWUSR | S_IRGRP));
+
+    ASSERT_EQ(::chmod(path.c_str(), S_IRUSR | S_IWUSR), 0);
+}
+
 TEST_F(FileJournalWriterTest, RefusesToOverwriteAnExistingJournal) {
     {
         (void)FileJournalWriter::create(dir(), header, SyncPolicy::None);

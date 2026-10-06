@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lockstep::main_app {
@@ -23,6 +24,11 @@ struct Options {
     // instruments, shard count and risk link policy; passing it together with
     // --instruments is an error. Empty means "use the flags above".
     std::filesystem::path config_file;
+    // Prints each shard's digest (app::digest, task 010) at shutdown,
+    // computed from this run's own live output (ShardRuntime's
+    // DigestBuilder), not by re-reading the journal - see main.cpp's
+    // comment at the call site for why.
+    bool print_digest_on_exit{false};
     bool help{false};
 };
 
@@ -36,10 +42,17 @@ inline constexpr const char* usage = R"(usage: exchange-core [options]
   --config=FILE               JSON config of instruments/shards    (excludes --instruments)
   --journal-dir=DIR           directory for shard-<id>.jnl files   (default ./journal)
   --fsync=none|commit         fdatasync journal on every commit    (default commit)
+  --print-digest-on-exit      print each shard's digest at shutdown (task 010)
   --help)";
 
 /// Parses `--key=value` style arguments. Startup-time code: errors are
 /// reported as a message for the user, not as exceptions.
 [[nodiscard]] std::expected<Options, std::string> parse_options(std::span<char* const> args);
+
+/// Parses a comma-separated instrument id list (`--instruments`'s value).
+/// Shared with lockstep-replay's own option parser (task 010 review F11),
+/// so the two tools' idea of a valid instrument list cannot drift apart.
+[[nodiscard]] std::expected<std::vector<std::uint32_t>, std::string> parse_instruments(
+    std::string_view text);
 
 }  // namespace lockstep::main_app

@@ -7,6 +7,7 @@ lockstep_add_test(lockstep_journal_tests
     record_codec_test.cpp
     file_journal_writer_test.cpp
     file_journal_reader_test.cpp
+    restart_test.cpp
   LINK lockstep::journal)
 
 # file_journal_reader_test.cpp runs the journal-dump tool on a journal it wrote.

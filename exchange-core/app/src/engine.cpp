@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "lockstep/app/fatal.hpp"
+
 namespace lockstep::app {
 
 namespace {
@@ -16,6 +18,7 @@ std::vector<EgressQueue*> egress_queues(const std::vector<std::unique_ptr<ShardR
 std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& config,
                                                        const Router& router,
                                                        JournalFactory& journal_factory,
+                                                       ResumeFactory& resume_factory,
                                                        Clock& clock,
                                                        concurrency::Doorbell& publisher_doorbell) {
     if (config.shard_count == 0 || config.shard_count > (1U << 16U)) {
@@ -32,18 +35,29 @@ std::vector<std::unique_ptr<ShardRuntime>> make_shards(const EngineConfig& confi
                       .risk_link_policy = config.risk_link_policy},
             .ingress_capacity = config.ingress_capacity,
             .egress_capacity = config.egress_capacity,
+            .record_digest = config.record_digest,
         };
-        shards.push_back(std::make_unique<ShardRuntime>(
+        auto& shard = shards.emplace_back(std::make_unique<ShardRuntime>(
             std::move(shard_config), journal_factory(id), clock, publisher_doorbell));
+        // Rebuild state recovered from an existing journal before anyone can
+        // observe this shard (ADR-0020): no thread has started yet, and the
+        // owner thread building the Engine is the only one touching it.
+        if (resume_factory) {
+            shard->resume_from_journal(resume_factory(id));
+        }
     }
     return shards;
 }
 
 }  // namespace
 
-Engine::Engine(EngineConfig config, JournalFactory journal_factory, Clock& clock)
+Engine::Engine(EngineConfig config,
+               JournalFactory journal_factory,
+               Clock& clock,
+               ResumeFactory resume_factory)
     : router_{Router::round_robin(config.instruments, config.shard_count)},
-      shards_{make_shards(config, router_, journal_factory, clock, publisher_doorbell_)},
+      shards_{make_shards(
+          config, router_, journal_factory, resume_factory, clock, publisher_doorbell_)},
       publisher_{egress_queues(shards_), publisher_doorbell_} {}
 
 Engine::~Engine() {
@@ -58,21 +72,40 @@ std::shared_ptr<Subscription> Engine::subscribe(SubscriptionFilter filter, std::
     return publisher_.subscribe(std::move(filter), capacity);
 }
 
-void Engine::start() {
+void Engine::start(std::span<const domain::Command> startup_commands) {
     start_called_ = true;
+    // Pushed before any shard thread exists and before accepting_ is set
+    // (see this method's doc comment, task 010 review auditor F-2): no
+    // submit()/broadcast() call can reach a shard's ingress until
+    // accepting_ is true, so every one of these is guaranteed to be popped
+    // before anything else, in the order given here, on every shard. No
+    // doorbell ring is needed: ShardRuntime::run polls before it first
+    // idles, and each thread starts after these pushes.
+    for (const auto& shard : shards_) {
+        for (const domain::Command& command : startup_commands) {
+            if (!shard->ingress().try_push(InboundCommand{command, {}})) {
+                // Can only happen if ingress_capacity is smaller than
+                // startup_commands.size() - a misconfiguration, not a
+                // runtime condition to recover from.
+                fatal("Engine::start: ingress full for startup commands");
+            }
+        }
+    }
     for (const auto& shard : shards_) {
         shard_threads_.emplace_back(
             [runtime = shard.get()](const std::stop_token& stop) { runtime->run(stop); });
     }
     publisher_thread_ = std::jthread([this](const std::stop_token& stop) { publisher_.run(stop); });
-    // relaxed: the flag only gates admission. Queue contents are synchronised
-    // by the queues themselves, and thread start-up already happens-before any
-    // work the threads do.
-    accepting_.store(true, std::memory_order_relaxed);
+    // release: pairs with the acquire loads in submit()/broadcast(). It makes
+    // the startup-command pushes above (their enqueue_pos_ CAS) happen-before
+    // any admitted producer's push, so by write-write coherence they take
+    // earlier slots in every ingress (task 010 review auditor F-2, ADR-0011).
+    accepting_.store(true, std::memory_order_release);
 }
 
 void Engine::stop() {
-    // relaxed: see start(). Producers are required to be stopped before stop()
+    // relaxed: nothing is published by turning admission off. Producers are
+    // required to be stopped before stop()
     // (shutdown protocol in engine.hpp), so this flag is a defensive guard, not
     // the mechanism that makes shutdown lossless.
     accepting_.store(false, std::memory_order_relaxed);
@@ -92,7 +125,8 @@ void Engine::stop() {
 }
 
 std::expected<void, SubmitError> Engine::submit(domain::Command command, Completion completion) {
-    if (!accepting_.load(std::memory_order_relaxed)) {  // relaxed: see start()
+    // acquire: pairs with start()'s release store, see there.
+    if (!accepting_.load(std::memory_order_acquire)) {
         return std::unexpected(SubmitError::ShuttingDown);
     }
     const auto instrument = instrument_of(command);
@@ -115,10 +149,18 @@ std::expected<void, SubmitError> Engine::submit(domain::Command command, Complet
 }
 
 std::expected<void, SubmitError> Engine::broadcast(domain::Command command) {
+    // acquire: pairs with start()'s release store, see there. Checked before
+    // the first push, not only while waiting for space, so nothing broadcast
+    // before start() can get ahead of the startup commands.
+    if (!accepting_.load(std::memory_order_acquire)) {
+        return std::unexpected(SubmitError::ShuttingDown);
+    }
     for (const auto& shard : shards_) {
         InboundCommand inbound{command, {}};
         while (!shard->ingress().try_push(std::move(inbound))) {  // NOLINT(bugprone-use-after-move)
-            if (!accepting_.load(std::memory_order_relaxed)) {    // relaxed: see start()
+            // relaxed: only re-checks for shutdown; the acquire above
+            // already ordered this producer after start()'s pushes.
+            if (!accepting_.load(std::memory_order_relaxed)) {
                 return std::unexpected(SubmitError::ShuttingDown);
             }
             std::this_thread::yield();
