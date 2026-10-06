@@ -53,7 +53,8 @@ public:
 
     /// Delivers a risk command to every shard (each journals and applies it).
     /// Waits for queue space rather than failing with Overloaded: risk commands
-    /// are rare and must not be dropped. Fails only when shutting down.
+    /// are rare and must not be dropped. Fails (ShuttingDown) only when the
+    /// engine is not accepting: not yet started, or shutting down.
     [[nodiscard]] virtual std::expected<void, SubmitError> broadcast(domain::Command command) = 0;
 };
 

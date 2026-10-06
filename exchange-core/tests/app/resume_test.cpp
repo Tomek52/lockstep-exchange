@@ -137,11 +137,13 @@ TEST(Resume, RestartWithFailClosedRejectsOrdersUntilTheLinkReconnects) {
 // order in the instant start() returns - not merely "usually first" because
 // nothing else had submitted yet. Exercised on a resumed journal (so every
 // shard already has N1 >= 1 resumed records, and the race is against the
-// *next* sequence number, not against an empty shard) and run under tsan to
-// catch any ordering bug, not just observe it once.
-TEST(Resume, StartupCommandIsFirstRecordDespiteConcurrentSubmitters) {
+// *next* sequence number, not against an empty shard) and run under tsan.
+// One round catches a reordering regression only about a third of the time
+// (auditor measurement, 4 cores), so the test repeats it with a fresh
+// engine to make a regression close to certain to show up in a single run.
+void expect_startup_command_first_despite_concurrent_submitters() {
     constexpr std::uint32_t shard_count = 4;
-    constexpr int submitter_count = 64;
+    constexpr int submitter_count = 16;
     constexpr std::uint32_t submits_per_thread = 20;
 
     ManualClock clock{1'000, 10};
@@ -201,6 +203,41 @@ TEST(Resume, StartupCommandIsFirstRecordDespiteConcurrentSubmitters) {
         ASSERT_NE(status, nullptr) << "shard " << s;
         EXPECT_FALSE(status->connected) << "shard " << s;
     }
+}
+
+TEST(Resume, StartupCommandIsFirstRecordDespiteConcurrentSubmitters) {
+    constexpr int rounds = 10;
+    for (int round = 0; round < rounds; ++round) {
+        SCOPED_TRACE(testing::Message() << "round " << round);
+        expect_startup_command_first_despite_concurrent_submitters();
+        if (HasFailure()) {
+            return;
+        }
+    }
+}
+
+// Task 010 review auditor F-B: broadcast() is refused before start(), like
+// submit(), so nothing broadcast early (e.g. a risk client started too soon)
+// can sit in an ingress ahead of the startup commands.
+TEST(Resume, BroadcastBeforeStartIsRefusedAndStartupCommandStaysFirst) {
+    ManualClock clock{1'000, 10};
+    test::MemoryJournals journals;
+    Engine engine{EngineConfig{.instruments = {{.id = InstrumentId{1}}}, .shard_count = 1},
+                  journals.factory(), clock};
+
+    const auto early = engine.broadcast(RiskLinkStatus{.connected = true});
+    ASSERT_FALSE(early.has_value());
+    EXPECT_EQ(early.error(), SubmitError::ShuttingDown);
+
+    const std::array<Command, 1> startup_commands{RiskLinkStatus{.connected = false}};
+    engine.start(startup_commands);
+    engine.stop();
+
+    const auto committed = journals.of(ShardId{0}).committed();
+    ASSERT_EQ(committed.size(), 1U);
+    const auto* status = std::get_if<RiskLinkStatus>(&committed.front().command);
+    ASSERT_NE(status, nullptr);
+    EXPECT_FALSE(status->connected);
 }
 
 TEST(Resume, EmptyResumeFactoryBehavesLikeAFreshShard) {

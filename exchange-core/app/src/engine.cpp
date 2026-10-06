@@ -78,7 +78,9 @@ void Engine::start(std::span<const domain::Command> startup_commands) {
     // (see this method's doc comment, task 010 review auditor F-2): no
     // submit()/broadcast() call can reach a shard's ingress until
     // accepting_ is true, so every one of these is guaranteed to be popped
-    // before anything else, in the order given here, on every shard.
+    // before anything else, in the order given here, on every shard. No
+    // doorbell ring is needed: ShardRuntime::run polls before it first
+    // idles, and each thread starts after these pushes.
     for (const auto& shard : shards_) {
         for (const domain::Command& command : startup_commands) {
             if (!shard->ingress().try_push(InboundCommand{command, {}})) {
@@ -94,14 +96,16 @@ void Engine::start(std::span<const domain::Command> startup_commands) {
             [runtime = shard.get()](const std::stop_token& stop) { runtime->run(stop); });
     }
     publisher_thread_ = std::jthread([this](const std::stop_token& stop) { publisher_.run(stop); });
-    // relaxed: the flag only gates admission. Queue contents are synchronised
-    // by the queues themselves, and thread start-up already happens-before any
-    // work the threads do.
-    accepting_.store(true, std::memory_order_relaxed);
+    // release: pairs with the acquire loads in submit()/broadcast(). It makes
+    // the startup-command pushes above (their enqueue_pos_ CAS) happen-before
+    // any admitted producer's push, so by write-write coherence they take
+    // earlier slots in every ingress (task 010 review auditor F-2, ADR-0011).
+    accepting_.store(true, std::memory_order_release);
 }
 
 void Engine::stop() {
-    // relaxed: see start(). Producers are required to be stopped before stop()
+    // relaxed: nothing is published by turning admission off. Producers are
+    // required to be stopped before stop()
     // (shutdown protocol in engine.hpp), so this flag is a defensive guard, not
     // the mechanism that makes shutdown lossless.
     accepting_.store(false, std::memory_order_relaxed);
@@ -121,7 +125,8 @@ void Engine::stop() {
 }
 
 std::expected<void, SubmitError> Engine::submit(domain::Command command, Completion completion) {
-    if (!accepting_.load(std::memory_order_relaxed)) {  // relaxed: see start()
+    // acquire: pairs with start()'s release store, see there.
+    if (!accepting_.load(std::memory_order_acquire)) {
         return std::unexpected(SubmitError::ShuttingDown);
     }
     const auto instrument = instrument_of(command);
@@ -144,10 +149,18 @@ std::expected<void, SubmitError> Engine::submit(domain::Command command, Complet
 }
 
 std::expected<void, SubmitError> Engine::broadcast(domain::Command command) {
+    // acquire: pairs with start()'s release store, see there. Checked before
+    // the first push, not only while waiting for space, so nothing broadcast
+    // before start() can get ahead of the startup commands.
+    if (!accepting_.load(std::memory_order_acquire)) {
+        return std::unexpected(SubmitError::ShuttingDown);
+    }
     for (const auto& shard : shards_) {
         InboundCommand inbound{command, {}};
         while (!shard->ingress().try_push(std::move(inbound))) {  // NOLINT(bugprone-use-after-move)
-            if (!accepting_.load(std::memory_order_relaxed)) {    // relaxed: see start()
+            // relaxed: only re-checks for shutdown; the acquire above
+            // already ordered this producer after start()'s pushes.
+            if (!accepting_.load(std::memory_order_relaxed)) {
                 return std::unexpected(SubmitError::ShuttingDown);
             }
             std::this_thread::yield();
