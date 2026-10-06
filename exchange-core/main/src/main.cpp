@@ -97,7 +97,7 @@ int run(const main_app::Options& options) {
     }
     app::EngineConfig config{std::move(*engine_config)};
     // Only --print-digest-on-exit pays for digest folding (task 010 review
-    // M1): it costs ~180ns per resting NewOrder, ~45% of apply() itself.
+    // M1); the cost is recorded in ADR-0020.
     config.record_digest = options.print_digest_on_exit;
     // One journal file per shard (ADR-0004). The header records the shard's
     // config so replay can refuse a journal recorded under another one

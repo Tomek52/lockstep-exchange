@@ -272,13 +272,14 @@ recovered records are handed to `Engine`'s `ResumeFactory`, which
 `ShardEngine` - still on the owner thread, still before `start()` creates
 any `std::jthread` - so there is nothing to synchronise here: the same
 single-writer rule that governs the running engine is trivially true while
-only one thread exists at all. `resume_from_journal()` also folds each
-replayed record's events and reply into the shard's `DigestBuilder`
+only one thread exists at all. When digest recording is enabled (it is
+opt-in: `EngineConfig::record_digest`, set by `--print-digest-on-exit`, see
+ADR-0020), `resume_from_journal()` also folds each replayed record's events and reply into the shard's `DigestBuilder`
 (without publishing them - they already reached their original recipients
 in the run that produced them), in file order, so it ends up in exactly the
 state a from-disk replay of the file so far would reach.
 
-Once shard threads start, the only new writer each `DigestBuilder` ever
+Once shard threads start, the only new writer each enabled `DigestBuilder` ever
 gets is its own shard thread, in the same place events/replies already
 get staged for egress (`ShardRuntime::process`). `main` reads it only
 after `Engine::stop()` has joined every shard thread; joining a
@@ -286,9 +287,10 @@ after `Engine::stop()` has joined every shard thread; joining a
 whatever that thread wrote, so this read needs no atomics of its own
 (see `DigestBuilder`'s own doc comment, `app/include/lockstep/app/digest.hpp`).
 
-Immediately after `start()`, before the gRPC server or risk client can
-reach the engine, `main` broadcasts `RiskLinkStatus{connected=false}` -
-deterministically this run's first live command on every shard, whether
+`main` passes `RiskLinkStatus{connected=false}` to `Engine::start()` as a
+startup command: `start()` pushes it into every shard's ingress before any
+shard thread exists and before `submit()`/`broadcast()` admit anything, so
+it is structurally this run's first live command on every shard, whether
 or not anything was just resumed, so a stale "connected" state a crash
 left behind cannot let `RiskLinkPolicy::FailClosed` treat the link as live
 with nothing actually connected.

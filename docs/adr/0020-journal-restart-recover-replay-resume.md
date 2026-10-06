@@ -111,9 +111,11 @@ growing output vectors a from-disk replay builds).
 
 **Folding is opt-in** (`EngineConfig::record_digest`, `ShardRuntime::
 Config::record_digest`; `ShardRuntime::digest_builder()` returns
-`std::optional<DigestBuilder>`, `nullopt` when disabled). Measured on this
-machine at roughly 180ns per resting `NewOrder` when enabled - about 45% of
-`apply()` itself - which is not something every run should pay for a
+`std::optional<DigestBuilder>`, `nullopt` when disabled). Measured ad hoc
+during the task 010 review (development sandbox, not a checked-in
+benchmark; task 018 owns repeatable measurements) at
+roughly 180ns per resting `NewOrder` when enabled - about 45% of `apply()`
+itself - which is not something every run should pay for a
 feature most runs never ask for. `main.cpp` enables it only when
 `--print-digest-on-exit` is passed; tests that need the digest enable it
 explicitly. Resuming into a shard with digest recording enabled still folds

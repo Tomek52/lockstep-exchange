@@ -110,10 +110,10 @@ shard's engine via `Engine`'s `ResumeFactory` *before* any shard thread
 starts - not published, only state rebuild. The shard then reopens the same
 file to append (`FileJournalWriter::open_for_append`) and resumes sequence
 numbering where it stopped. A refused or inconsistent journal fails startup
-naming the file; nothing is deleted or truncated automatically. Right after
-`Engine::start()`, and before the gRPC server or risk client can reach it,
-each shard journals `RiskLinkStatus{connected=false}` as this run's own
-first command, so a resumed "link was up" state from before a crash cannot
+naming the file; nothing is deleted or truncated automatically.
+`Engine::start()` takes `RiskLinkStatus{connected=false}` as a startup
+command and queues it on every shard before admitting any other command,
+so each shard journals it as this run's own first command, so a resumed "link was up" state from before a crash cannot
 let `RiskLinkPolicy::FailClosed` treat the link as live with nothing
 connected.
 

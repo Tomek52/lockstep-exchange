@@ -391,8 +391,10 @@ TEST(Digest, GoldenValueForAFixedSmallInput) {
 // exists today, so this is forward defence, not a fix for an exploitable
 // bug - this test and comment are the record of that check, since the
 // collision itself cannot be demonstrated against the current, smaller set
-// of variants.
-TEST(Digest, ItemTypeTagKeepsALengthMatchedEventAndReplyApart) {
+// of variants. This test therefore does not depend on the tag (the kind
+// bytes and finish()'s event/reply counts already differ); the tag itself
+// is pinned by GoldenValueForAFixedSmallInput.
+TEST(Digest, LengthMatchedEventAndReplyStayDistinct) {
     const PublishedEvent risk_event{.shard = ShardId{0},
                                     .sequence = SequenceNumber{1},
                                     .timestamp = Timestamp{100},

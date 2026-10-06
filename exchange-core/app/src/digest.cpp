@@ -45,11 +45,9 @@ template <std::integral T>
 // the shared shard/sequence/timestamp prefix), so a future event or reply
 // variant that also lands on 33 bytes with a kind/outcome byte of 0 or 1
 // would collide with an ok/rejected reply at the type level, not just by
-// unlucky field values. These values are a separate namespace from
-// EventKind's and CommandResult's own tag bytes (which only ever
-// distinguish within one item type): 2 and 3 are deliberately clear of
-// byte_of(EventKind)'s 0-6 and digest_result's 0-1, so this tag and an
-// item's own internal tag can never be mistaken for each other either.
+// unlucky field values. The values may overlap EventKind's and
+// CommandResult's own tag bytes: this tag always sits at a fixed position
+// (first byte of the item), so position, not value, tells them apart.
 inline constexpr std::uint8_t digest_item_event_tag = 2;
 inline constexpr std::uint8_t digest_item_reply_tag = 3;
 

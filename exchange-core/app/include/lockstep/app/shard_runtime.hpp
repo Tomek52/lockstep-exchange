@@ -114,8 +114,8 @@ public:
     [[nodiscard]] ShardStats stats() const noexcept;
 
     /// nullopt unless `Config::record_digest` was set (task 010 review M1:
-    /// folding costs ~180ns per resting NewOrder, ~45% of apply() itself,
-    /// so it stays off unless something wants the digest). When present,
+    /// folding has a measurable per-order cost, see ADR-0020, so it stays
+    /// off unless something wants the digest). When present,
     /// holds every event and reply this shard has folded so far - every
     /// record resumed from an existing journal at startup, then every
     /// command this run has processed, in order (task 010 review F1).

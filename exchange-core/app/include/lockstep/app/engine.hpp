@@ -30,8 +30,8 @@ struct EngineConfig {
     std::size_t egress_capacity{16384};
     domain::RiskLinkPolicy risk_link_policy{domain::RiskLinkPolicy::FailOpen};
     // Opt-in: each shard folds every event/reply into a DigestBuilder as it
-    // produces them (task 010 review M1). Measured at ~180ns per resting
-    // NewOrder (~45% of apply() itself), so it stays off the hot path unless
+    // produces them (task 010 review M1). That has a measurable per-order
+    // cost (figure in ADR-0020), so it stays off the hot path unless
     // something actually wants the digest (--print-digest-on-exit, or a
     // test). See ShardRuntime::digest_builder()'s comment and ADR-0020.
     bool record_digest{false};
