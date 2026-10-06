@@ -148,7 +148,7 @@ jobs:
       - name: Build exchange-core
         run: |
           cmake --preset debug -DLOCKSTEP_BUILD_TESTS=OFF -DLOCKSTEP_BUILD_BENCHMARKS=OFF
-          cmake --build --preset debug --target exchange-core lockstep-replay
+          cmake --build --preset debug --target exchange-core lockstep-replay journal-dump
       - name: Build risk-sentinel and loadgen
         run: cd rust && cargo build --locked
       - name: Smoke test
