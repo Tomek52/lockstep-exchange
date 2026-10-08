@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "lockstep/app/ports/command_ingress.hpp"
 #include "lockstep/app/ports/event_subscriber.hpp"
@@ -97,7 +98,13 @@ private:
     bool stopping_{false};
     bool session_done_{false};          ///< the current session finished (reconnect)
     std::unique_ptr<Session> session_;  ///< the live stream, or null between attempts
-    std::unordered_map<std::uint64_t, std::uint32_t> applied_counts_;  ///< command_id -> shards
+    /// The previous session had been accepted; set by on_session_done, read by
+    /// the manager after teardown to decide whether to reset the back-off.
+    bool last_session_established_{false};
+    /// command_id -> per-shard count of RiskCommandApplied seen but not yet
+    /// consumed by an ack. Per shard (not a bare total) so a duplicate from one
+    /// shard can never stand in for another shard's apply.
+    std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> applied_counts_;
 };
 
 }  // namespace lockstep::risk_client

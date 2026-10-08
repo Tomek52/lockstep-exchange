@@ -1,5 +1,6 @@
 #include "lockstep/risk_client/risk_client.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -42,6 +43,8 @@ public:
         hello->set_exchange_id(config.exchange_id);
         hello->set_shard_count(config.shard_count);
 
+        // relaxed: a lone timestamp; nothing else is published through it and
+        // a stale read only delays the idle check by one heartbeat interval.
         last_received_ns_.store(now_ns(), std::memory_order_relaxed);
 
         stub_->async()->Monitor(&context_, this);
@@ -83,6 +86,7 @@ public:
         if (!ok) {
             return;  // stream is ending; OnDone follows
         }
+        // relaxed: pairs with the relaxed load in idle_ns(); see the ctor.
         last_received_ns_.store(now_ns(), std::memory_order_relaxed);
         switch (response_.message_case()) {
             case v1::MonitorResponse::kAccept:
@@ -123,6 +127,8 @@ public:
 
     /// Nanoseconds (steady clock) since anything was last received downstream.
     [[nodiscard]] std::int64_t idle_ns() const {
+        // relaxed: pairs with the relaxed stores above; a lone timestamp, so
+        // no ordering with other memory is needed.
         return now_ns() - last_received_ns_.load(std::memory_order_relaxed);
     }
 
@@ -188,13 +194,13 @@ void RiskClient::run() {
                 break;
             }
             session_done_ = false;
+            last_session_established_ = false;
             applied_counts_.clear();  // a new stream re-aggregates from scratch
             session_ = std::make_unique<Session>(*this, config_);
         }
 
         // Service the live session: send heartbeats on the interval and cancel
         // if nothing has been received within the receive timeout.
-        bool established_this_session = false;
         while (true) {
             std::unique_lock lock{mutex_};
             wake_.wait_for(lock, config_.heartbeat_interval,
@@ -206,8 +212,6 @@ void RiskClient::run() {
             if (session == nullptr) {
                 break;
             }
-            const bool is_up = established_.load(std::memory_order_acquire);
-            established_this_session = established_this_session || is_up;
             const std::int64_t idle_ns = session->idle_ns();
             lock.unlock();
 
@@ -237,11 +241,15 @@ void RiskClient::run() {
             finished.reset();
         }
 
+        bool established_this_session = false;
         {
+            // on_session_done recorded whether this session was ever accepted
+            // (even one too short for the loop above to observe it up).
             const std::scoped_lock lock{mutex_};
             if (stopping_) {
                 break;
             }
+            established_this_session = last_session_established_;
         }
 
         // Capped exponential back-off; reset after a session that was accepted.
@@ -298,13 +306,32 @@ void RiskClient::on_events(std::span<const app::PublishedEvent> events) {
             }
         } else if (const auto* applied = std::get_if<domain::RiskCommandApplied>(&event.event)) {
             const std::uint64_t id = applied->command_id.value();
+            const std::size_t shard = event.shard.value();
+            if (shard >= config_.shard_count) {
+                support::warn("risk: ignoring RiskCommandApplied {} from unknown shard {}", id,
+                              shard);
+                continue;
+            }
             bool complete = false;
             {
                 const std::scoped_lock lock{mutex_};
-                const std::uint32_t count = ++applied_counts_[id];
-                if (count >= config_.shard_count) {
-                    applied_counts_.erase(id);
+                auto& per_shard = applied_counts_[id];
+                if (per_shard.empty()) {
+                    per_shard.assign(config_.shard_count, 0U);
+                }
+                ++per_shard[shard];
+                // Acked once every shard has applied it. One apply per shard is
+                // consumed per ack, so a command the sentinel resends (same id,
+                // ADR-0013) is acked again after every shard re-applies it, and
+                // a duplicate from one shard never counts for another.
+                if (std::ranges::all_of(per_shard, [](std::uint32_t n) { return n > 0; })) {
                     complete = true;
+                    for (auto& n : per_shard) {
+                        --n;
+                    }
+                    if (std::ranges::all_of(per_shard, [](std::uint32_t n) { return n == 0; })) {
+                        applied_counts_.erase(id);
+                    }
                 }
             }
             if (complete) {
@@ -353,6 +380,7 @@ void RiskClient::on_session_done(bool was_established, const std::string& reason
     }
     {
         const std::scoped_lock lock{mutex_};
+        last_session_established_ = was_established;
         session_done_ = true;
     }
     wake_.notify_all();

@@ -149,8 +149,7 @@ public:
                     state_.executions.push_back(request_.execution());
                     break;
                 case v1::MonitorRequest::kCommandApplied:
-                    state_.command_applied_ids.push_back(
-                        request_.command_applied().command_id());
+                    state_.command_applied_ids.push_back(request_.command_applied().command_id());
                     break;
                 case v1::MonitorRequest::kHeartbeat:
                 case v1::MonitorRequest::MESSAGE_NOT_SET:
@@ -241,10 +240,11 @@ app::PublishedEvent trade_event() {
 }
 
 app::PublishedEvent applied_event(std::uint64_t command_id, std::uint32_t shard) {
-    return app::PublishedEvent{.shard = domain::ShardId{shard},
-                               .sequence = domain::SequenceNumber{1},
-                               .timestamp = domain::Timestamp{123},
-                               .event = domain::RiskCommandApplied{domain::RiskCommandId{command_id}}};
+    return app::PublishedEvent{
+        .shard = domain::ShardId{shard},
+        .sequence = domain::SequenceNumber{1},
+        .timestamp = domain::Timestamp{123},
+        .event = domain::RiskCommandApplied{domain::RiskCommandId{command_id}}};
 }
 
 TEST(RiskClient, HandshakeSendsHelloWithExchangeIdAndShardCount) {
@@ -320,14 +320,65 @@ TEST(RiskClient, CommandIsBroadcastAndAckedOnceAllShardsApply) {
         client.on_events(std::span{&event, 1});
     }
 
-    ASSERT_TRUE(state.wait_for(
-        [](const SentinelState& s) { return !s.command_applied_ids.empty(); }));
-    // Give any erroneous extra acks a moment to arrive, then assert exactly one.
-    std::this_thread::sleep_for(200ms);
+    // Upstream messages are FIFO, so once the ack for a later marker command
+    // (56) has arrived, any erroneous extra ack for 55 would already be there:
+    // wait on that instead of sleeping.
+    for (std::uint32_t shard = 0; shard < shards; ++shard) {
+        const auto event = applied_event(56, shard);
+        client.on_events(std::span{&event, 1});
+    }
+    ASSERT_TRUE(
+        state.wait_for([](const SentinelState& s) { return s.command_applied_ids.size() >= 2; }));
+    {
+        const std::scoped_lock lock{state.mutex};
+        ASSERT_EQ(state.command_applied_ids.size(), 2U);
+        EXPECT_EQ(state.command_applied_ids[0], 55U);
+        EXPECT_EQ(state.command_applied_ids[1], 56U);
+    }
+    client.stop();
+}
+
+TEST(RiskClient, DuplicateApplyFromOneShardDoesNotAckEarly) {
+    SentinelState state;
+    FakeSentinel service{state};
+    ScopedServer server{0, service};
+
+    RecordingIngress ingress;
+    RiskClient client{fast_config(server.port(), 2), ingress};
+    client.start();
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.hellos >= 1; }));
+
+    // Shard 0 applies command 70 twice (e.g. a resend, ADR-0013): shard 1 has
+    // not applied it, so there must be no ack yet. Then shard 1 applies it and
+    // the first ack is sent; shard 1's second apply completes the second round.
+    for (const std::uint32_t shard : {0U, 0U}) {
+        const auto event = applied_event(70, shard);
+        client.on_events(std::span{&event, 1});
+    }
+    // FIFO marker: command 71 fully applied. Its ack must be the first one.
+    for (std::uint32_t shard = 0; shard < 2; ++shard) {
+        const auto event = applied_event(71, shard);
+        client.on_events(std::span{&event, 1});
+    }
+    ASSERT_TRUE(
+        state.wait_for([](const SentinelState& s) { return !s.command_applied_ids.empty(); }));
     {
         const std::scoped_lock lock{state.mutex};
         ASSERT_EQ(state.command_applied_ids.size(), 1U);
-        EXPECT_EQ(state.command_applied_ids[0], 55U);
+        EXPECT_EQ(state.command_applied_ids[0], 71U);
+    }
+
+    for (const std::uint32_t shard : {1U, 1U}) {
+        const auto event = applied_event(70, shard);
+        client.on_events(std::span{&event, 1});
+    }
+    ASSERT_TRUE(
+        state.wait_for([](const SentinelState& s) { return s.command_applied_ids.size() >= 3; }));
+    {
+        const std::scoped_lock lock{state.mutex};
+        ASSERT_EQ(state.command_applied_ids.size(), 3U);
+        EXPECT_EQ(state.command_applied_ids[1], 70U);
+        EXPECT_EQ(state.command_applied_ids[2], 70U);
     }
     client.stop();
 }
@@ -345,9 +396,8 @@ TEST(RiskClient, ReconnectsAfterServerRestartWithExactlyOneLinkTransitionEach) {
     client.start();
 
     // First session up: link status connected = true.
-    ASSERT_TRUE(ingress.wait_for([](const std::vector<domain::Command>& cmds) {
-        return !cmds.empty();
-    }));
+    ASSERT_TRUE(
+        ingress.wait_for([](const std::vector<domain::Command>& cmds) { return !cmds.empty(); }));
     ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.sessions >= 1; }));
 
     // Kill the server; the client should see the link drop.
@@ -402,8 +452,15 @@ TEST(RiskClient, StopDuringBackoffReturnsPromptly) {
     // No server at all: the client stays in connect/back-off. stop() must still
     // return quickly (well within the 200 ms bound).
     RecordingIngress ingress;
-    // Pick a port nothing is listening on.
-    RiskClient client{fast_config(59999, 1), ingress};
+    // A port that was just free: bind port 0, note it, release it.
+    int dead_port = 0;
+    {
+        SentinelState unused_state;
+        FakeSentinel unused_service{unused_state};
+        const ScopedServer probe{0, unused_service};
+        dead_port = probe.port();
+    }
+    RiskClient client{fast_config(dead_port, 1), ingress};
     client.start();
     std::this_thread::sleep_for(150ms);  // let it enter back-off at least once
 
