@@ -146,7 +146,7 @@ ROADMAP.md                milestones → task specs
 | Domain: strong types, validation, pooled order book with O(1) cancel, price-time matching, modify (cancel/replace), duplicate client order id rejection, and risk controls (block, kill switch, link policy) | ✅ |
 | Runtime: shards + publisher on `std::jthread`, write-ahead ordering, lossless shutdown | ✅ lock-free SPSC egress ([task 005](docs/tasks/005-spsc-queue.md)) and MPSC ingress ([task 006](docs/tasks/006-mpsc-queue.md)); threads park on a `Doorbell` instead of polling, with runtime stats exposed ([task 007](docs/tasks/007-runtime-idle-and-stats.md)); runtime subscriptions with filtering and a slow-consumer policy ([task 011](docs/tasks/011-publisher-fanout.md)) |
 | Order entry over gRPC, end to end | ✅ |
-| Risk session handshake + inbound risk commands | ✅ (reports, acks, reconnect: task 014) |
+| Risk loop: handshake, inbound commands, execution reports, ack aggregation across shards, heartbeats, reconnect with back-off | ✅ ([task 014](docs/tasks/014-risk-client-adapter.md)) |
 | Write-ahead journal on disk: one file per shard, CRC32C-checked records, `--journal-dir`, `--fsync=none\|commit` | ✅ writer ([task 008](docs/tasks/008-journal-writer.md)); lazy `std::generator` reader, torn-tail recovery, `journal-dump` and a decoder fuzzer ([task 009](docs/tasks/009-journal-reader.md)); recover/replay/resume a restart and a `lockstep-replay` digest tool ([task 010](docs/tasks/010-deterministic-replay.md), [ADR-0020](docs/adr/0020-journal-restart-recover-replay-resume.md)) |
 | Deterministic replay test (live vs replay, in memory and on disk, crash recovery, restart) | ✅ ([task 010](docs/tasks/010-deterministic-replay.md)) |
 | Market data stream | ⏳ task 013 |
