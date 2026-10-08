@@ -32,6 +32,7 @@ The single-writer runtime on its real queues, with honest idle behaviour.
 - [x] [006 Lock-free bounded MPSC queue](docs/tasks/006-mpsc-queue.md)
 - [x] [007 Parking idle strategy, wake-ups, runtime stats](docs/tasks/007-runtime-idle-and-stats.md)
 - [x] [011 Publisher subscriptions with slow-consumer policy](docs/tasks/011-publisher-fanout.md)
+- [ ] [020 Stabilise the idle-parking test under CPU load](docs/tasks/020-stabilize-idle-park-test.md)
 
 ## M3: Durable and replayable
 
