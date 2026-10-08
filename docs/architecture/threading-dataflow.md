@@ -49,7 +49,9 @@ flowchart LR
 | Thread | Owns (sole writer) | Reads from | Writes to |
 |---|---|---|---|
 | gRPC callback threads | nothing | network | shard ingress (MPSC) |
-| risk client callbacks | nothing | Monitor stream | every shard ingress (broadcast) |
+| risk client callbacks | nothing | Monitor stream | risk client dispatch queue (never blocks) |
+| risk client dispatcher | nothing | dispatch queue (FIFO: link status, risk commands) | every shard ingress (broadcast; may wait for space) |
+| risk client manager | the live Monitor session | - | Monitor stream (heartbeats, reconnect with back-off) |
 | shard *k* | `ShardEngine` *k* (books, risk state), journal *k*, sequence counter | ingress *k* | egress *k* (SPSC) |
 | publisher | `subscriptions_` list, `Subscription` control queue | all egress queues, subscription control queue (MPSC) | `EventSubscriber`s, `Subscription` rings, completions |
 

@@ -24,3 +24,12 @@ target_link_options(journal_decode_fuzzer PRIVATE -fsanitize=fuzzer)
 add_test(NAME fuzz.journal_decode_smoke
   COMMAND journal_decode_fuzzer -runs=20000 -seed=1)
 set_tests_properties(fuzz.journal_decode_smoke PROPERTIES LABELS fuzz)
+
+add_executable(risk_command_decode_fuzzer risk_command_decode_fuzzer.cpp)
+target_link_libraries(risk_command_decode_fuzzer PRIVATE lockstep::codec lockstep::compile_options)
+target_compile_options(risk_command_decode_fuzzer PRIVATE -fsanitize=fuzzer)
+target_link_options(risk_command_decode_fuzzer PRIVATE -fsanitize=fuzzer)
+
+add_test(NAME fuzz.risk_command_decode_smoke
+  COMMAND risk_command_decode_fuzzer -runs=20000 -seed=1)
+set_tests_properties(fuzz.risk_command_decode_smoke PROPERTIES LABELS fuzz)

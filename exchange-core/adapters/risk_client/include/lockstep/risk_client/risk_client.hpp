@@ -1,16 +1,25 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
 #include "lockstep/app/ports/command_ingress.hpp"
 #include "lockstep/app/ports/event_subscriber.hpp"
+#include "lockstep/domain/commands.hpp"
 
 namespace lockstep::v1 {
-class RiskCommand;  // generated; forward-declared to keep gRPC out of this header
+class RiskCommand;     // generated; forward-declared to keep gRPC out of this header
+class MonitorRequest;  // generated
 }  // namespace lockstep::v1
 
 namespace lockstep::risk_client {
@@ -19,18 +28,28 @@ struct RiskClientConfig {
     std::string target;  ///< host:port of risk-sentinel
     std::string exchange_id;
     std::uint32_t shard_count{1};
+
+    /// How often a heartbeat is sent upstream while a session is up.
+    std::chrono::milliseconds heartbeat_interval{1000};
+    /// Cancel the session if nothing is received for this long (ADR-0013).
+    std::chrono::milliseconds receive_timeout{5000};
+    /// Capped exponential back-off between reconnect attempts: base, then
+    /// base*2^n, clamped to max; reset after a successful accept.
+    std::chrono::milliseconds backoff_base{100};
+    std::chrono::milliseconds backoff_max{5000};
+    /// Upstream write queue bound; on overflow the session is dropped and a
+    /// reconnect scheduled (never block the publisher).
+    std::size_t max_queued_messages{100'000};
 };
 
-/// Driven + driving adapter for the risk loop (ADR-0013). Holds one
-/// RiskSentinelService.Monitor bidi stream:
-///  * upstream: hello, then (task 014) execution reports and CommandApplied acks
-///    derived from published events;
+/// Driven + driving adapter for the risk loop (ADR-0013). Keeps one
+/// RiskSentinelService.Monitor bidi stream alive, reconnecting with back-off:
+///  * upstream: hello, then execution reports (two per Trade), CommandApplied
+///    acks aggregated across shards, and periodic heartbeats;
 ///  * downstream: accept, then RiskCommands, decoded and broadcast to every
 ///    shard through CommandIngress so they are journaled like orders.
-/// Link transitions are themselves broadcast as RiskLinkStatus commands.
-///
-/// SKELETON STATUS: handshake + inbound commands. Report forwarding, ack
-/// aggregation and reconnect-with-backoff: docs/tasks/014-risk-client-adapter.md.
+/// Link transitions (accepted <-> closed) are broadcast as RiskLinkStatus
+/// commands, exactly once per transition, so they are journaled too.
 class RiskClient final : public app::EventSubscriber {
 public:
     RiskClient(RiskClientConfig config, app::CommandIngress& ingress);
@@ -40,30 +59,74 @@ public:
     RiskClient& operator=(RiskClient&&) = delete;
     ~RiskClient() override;
 
-    /// Opens the stream asynchronously. An unreachable sentinel is logged, not
-    /// fatal (fail-open by default, ADR-0013).
+    /// Starts the manager thread, which opens the stream and keeps it alive.
+    /// An unreachable sentinel is logged, not fatal (fail-open, ADR-0013).
     void start();
 
-    /// Cancels the stream and waits until gRPC reports it done. Call before
-    /// Engine::stop() - the risk client is a producer (shutdown protocol).
+    /// Stops the manager thread, cancels any live stream and any pending
+    /// reconnect back-off, and returns promptly. Call before Engine::stop() -
+    /// the risk client is a producer (shutdown protocol). Commands still queued
+    /// for the shards are discarded; a broadcast already waiting for ingress
+    /// space finishes first (bounded: the shards keep draining).
     void stop();
 
     [[nodiscard]] bool session_established() const noexcept;
 
+    /// Publisher-thread callback: turns Trades into execution reports and
+    /// aggregates RiskCommandApplied across shards. Never blocks (ADR-0006).
     void on_events(std::span<const app::PublishedEvent> events) override;
 
 private:
     class Session;
     friend class Session;
 
+    void run();  ///< manager-thread loop: connect, then reconnect with back-off
+    void enqueue_upstream(v1::MonitorRequest&& message);  ///< thread-safe; may drop the session
+
     void on_accept(const std::string& sentinel_id);
     void on_command(const v1::RiskCommand& command);
     void on_session_done(bool was_established, const std::string& reason);
 
+    /// Queues a command for the dispatcher thread; never blocks. gRPC callback
+    /// threads use it so a full shard ingress cannot stall the stream.
+    /// `droppable` commands are discarded (logged) if the queue is at its
+    /// bound; link status is never dropped (bounded by the number of sessions).
+    void dispatch(const domain::Command& command, bool droppable);
+    void dispatch_loop();  ///< dispatcher-thread body: FIFO into ingress_.broadcast()
+
     RiskClientConfig config_;
     app::CommandIngress& ingress_;
-    std::unique_ptr<Session> session_;
+
     std::atomic<bool> established_{false};
+
+    std::thread manager_;
+    std::thread dispatcher_;
+
+    // Broadcast hand-off. FIFO preserves the order link-up, commands,
+    // link-down. Lock order: mutex_ and dispatch_mutex_ are never held
+    // together.
+    /// Bound on commands queued while shard ingress is full. Risk commands are
+    /// rare; this only trips on a runaway sentinel.
+    static constexpr std::size_t max_queued_commands{4096};
+    std::mutex dispatch_mutex_;
+    std::condition_variable dispatch_cv_;
+    std::deque<domain::Command> dispatch_queue_;
+    bool dispatch_stop_{false};
+
+    // Guards all mutable session state below. Held briefly; never while
+    // blocking on gRPC.
+    std::mutex mutex_;
+    std::condition_variable wake_;  ///< manager wakes on: session done, or stop
+    bool stopping_{false};
+    bool session_done_{false};          ///< the current session finished (reconnect)
+    std::unique_ptr<Session> session_;  ///< the live stream, or null between attempts
+    /// The previous session had been accepted; set by on_session_done, read by
+    /// the manager after teardown to decide whether to reset the back-off.
+    bool last_session_established_{false};
+    /// command_id -> per-shard count of RiskCommandApplied seen but not yet
+    /// consumed by an ack. Per shard (not a bare total) so a duplicate from one
+    /// shard can never stand in for another shard's apply.
+    std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> applied_counts_;
 };
 
 }  // namespace lockstep::risk_client

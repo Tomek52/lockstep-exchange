@@ -9,7 +9,7 @@ lockstep_add_proto_library(lockstep_proto
     lockstep/v1/risk.proto)
 add_library(lockstep::proto ALIAS lockstep_proto)
 
-add_library(lockstep_codec STATIC src/order_entry_codec.cpp)
+add_library(lockstep_codec STATIC src/order_entry_codec.cpp src/risk_codec.cpp)
 add_library(lockstep::codec ALIAS lockstep_codec)
 
 target_include_directories(lockstep_codec PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
