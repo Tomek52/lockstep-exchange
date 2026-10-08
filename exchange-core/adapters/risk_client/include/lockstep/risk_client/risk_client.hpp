@@ -15,6 +15,7 @@
 
 #include "lockstep/app/ports/command_ingress.hpp"
 #include "lockstep/app/ports/event_subscriber.hpp"
+#include "lockstep/domain/commands.hpp"
 
 namespace lockstep::v1 {
 class RiskCommand;     // generated; forward-declared to keep gRPC out of this header
@@ -64,7 +65,9 @@ public:
 
     /// Stops the manager thread, cancels any live stream and any pending
     /// reconnect back-off, and returns promptly. Call before Engine::stop() -
-    /// the risk client is a producer (shutdown protocol).
+    /// the risk client is a producer (shutdown protocol). Commands still queued
+    /// for the shards are discarded; a broadcast already waiting for ingress
+    /// space finishes first (bounded: the shards keep draining).
     void stop();
 
     [[nodiscard]] bool session_established() const noexcept;
@@ -84,12 +87,31 @@ private:
     void on_command(const v1::RiskCommand& command);
     void on_session_done(bool was_established, const std::string& reason);
 
+    /// Queues a command for the dispatcher thread; never blocks. gRPC callback
+    /// threads use it so a full shard ingress cannot stall the stream.
+    /// `droppable` commands are discarded (logged) if the queue is at its
+    /// bound; link status is never dropped (bounded by the number of sessions).
+    void dispatch(const domain::Command& command, bool droppable);
+    void dispatch_loop();  ///< dispatcher-thread body: FIFO into ingress_.broadcast()
+
     RiskClientConfig config_;
     app::CommandIngress& ingress_;
 
     std::atomic<bool> established_{false};
 
     std::thread manager_;
+    std::thread dispatcher_;
+
+    // Broadcast hand-off. FIFO preserves the order link-up, commands,
+    // link-down. Lock order: mutex_ and dispatch_mutex_ are never held
+    // together.
+    /// Bound on commands queued while shard ingress is full. Risk commands are
+    /// rare; this only trips on a runaway sentinel.
+    static constexpr std::size_t max_queued_commands{4096};
+    std::mutex dispatch_mutex_;
+    std::condition_variable dispatch_cv_;
+    std::deque<domain::Command> dispatch_queue_;
+    bool dispatch_stop_{false};
 
     // Guards all mutable session state below. Held briefly; never while
     // blocking on gRPC.

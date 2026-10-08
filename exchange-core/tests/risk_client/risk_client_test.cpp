@@ -65,6 +65,53 @@ private:
     std::vector<domain::Command> commands_;
 };
 
+/// An ingress whose broadcast() blocks until released, like Engine::broadcast()
+/// spinning on full shard queues (ADR-0013). Records what got through.
+class BlockingIngress final : public app::CommandIngress {
+public:
+    std::expected<void, app::SubmitError> submit(domain::Command /*command*/,
+                                                 app::Completion /*completion*/) override {
+        ADD_FAILURE() << "risk client must not submit(); it broadcasts";
+        return std::unexpected(app::SubmitError::NotRoutable);
+    }
+
+    std::expected<void, app::SubmitError> broadcast(domain::Command command) override {
+        std::unique_lock lock{mutex_};
+        ++entered_;
+        cv_.notify_all();
+        cv_.wait(lock, [&] { return open_; });
+        commands_.push_back(command);
+        cv_.notify_all();
+        return {};
+    }
+
+    void release() {
+        {
+            const std::scoped_lock lock{mutex_};
+            open_ = true;
+        }
+        cv_.notify_all();
+    }
+
+    bool wait_entered(int count, std::chrono::milliseconds timeout = 2000ms) {
+        std::unique_lock lock{mutex_};
+        return cv_.wait_for(lock, timeout, [&] { return entered_ >= count; });
+    }
+
+    template <typename Predicate>
+    bool wait_for(Predicate pred, std::chrono::milliseconds timeout = 2000ms) {
+        std::unique_lock lock{mutex_};
+        return cv_.wait_for(lock, timeout, [&] { return pred(commands_); });
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    int entered_{0};
+    bool open_{false};
+    std::vector<domain::Command> commands_;
+};
+
 /// Shared record of what the fake sentinel received upstream, plus a handle to
 /// push one command downstream. Survives reconnects (keyed by nothing - the
 /// test drives it directly).
@@ -77,6 +124,7 @@ struct SentinelState {
     std::vector<v1::ExecutionReport> executions;
     std::vector<std::uint64_t> command_applied_ids;
     int sessions{0};
+    int heartbeats{0};
 
     // A command the active reactor should push downstream once, if set.
     std::atomic<bool> have_pending_command{false};
@@ -152,6 +200,8 @@ public:
                     state_.command_applied_ids.push_back(request_.command_applied().command_id());
                     break;
                 case v1::MonitorRequest::kHeartbeat:
+                    ++state_.heartbeats;
+                    break;
                 case v1::MonitorRequest::MESSAGE_NOT_SET:
                     break;
             }
@@ -446,6 +496,47 @@ TEST(RiskClient, ReconnectsAfterServerRestartWithExactlyOneLinkTransitionEach) {
 
     client.stop();
     server.reset();
+}
+
+TEST(RiskClient, StalledIngressDoesNotStallHeartbeatsOrReconnect) {
+    // The shards' ingress is full: broadcast() blocks. The gRPC callbacks and
+    // the manager must not be held up behind it - heartbeats keep flowing and
+    // a dropped stream is reconnected - and once the ingress frees up the
+    // link transitions arrive in order: up, down, up.
+    SentinelState state;
+    FakeSentinel service{state};
+    auto server = std::make_unique<ScopedServer>(0, service);
+    const int port = server->port();
+
+    BlockingIngress ingress;
+    RiskClient client{fast_config(port, 1), ingress};
+    client.start();
+
+    ASSERT_TRUE(ingress.wait_entered(1));  // link-up is stuck in broadcast()
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.heartbeats >= 3; }, 3000ms));
+
+    server.reset();  // the stream drops; OnDone must not wait on the ingress
+    server = std::make_unique<ScopedServer>(port, service);
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.sessions >= 2; }, 4000ms));
+
+    ingress.release();
+    ASSERT_TRUE(ingress.wait_for(
+        [](const std::vector<domain::Command>& cmds) { return cmds.size() >= 3; }));
+    client.stop();
+
+    std::vector<bool> transitions;
+    ASSERT_TRUE(ingress.wait_for([&](const std::vector<domain::Command>& cmds) {
+        for (const auto& c : cmds) {
+            if (const auto* link = std::get_if<domain::RiskLinkStatus>(&c)) {
+                transitions.push_back(link->connected);
+            }
+        }
+        return true;
+    }));
+    ASSERT_GE(transitions.size(), 3U);
+    EXPECT_TRUE(transitions[0]);
+    EXPECT_FALSE(transitions[1]);
+    EXPECT_TRUE(transitions[2]);
 }
 
 TEST(RiskClient, StopDuringBackoffReturnsPromptly) {

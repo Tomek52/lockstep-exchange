@@ -162,6 +162,7 @@ RiskClient::~RiskClient() {
 
 void RiskClient::start() {
     support::info("risk: connecting to risk-sentinel at {}", config_.target);
+    dispatcher_ = std::thread{[this] { dispatch_loop(); }};
     manager_ = std::thread{[this] { run(); }};
 }
 
@@ -176,6 +177,51 @@ void RiskClient::stop() {
     wake_.notify_all();
     if (manager_.joinable()) {
         manager_.join();  // the manager tears down the live session on its way out
+    }
+    // The session is gone, so nothing queues more commands. Wake the dispatcher
+    // and let it discard what is left.
+    {
+        const std::scoped_lock lock{dispatch_mutex_};
+        dispatch_stop_ = true;
+    }
+    dispatch_cv_.notify_all();
+    if (dispatcher_.joinable()) {
+        dispatcher_.join();
+    }
+}
+
+void RiskClient::dispatch(const domain::Command& command, bool droppable) {
+    {
+        const std::scoped_lock lock{dispatch_mutex_};
+        if (droppable && dispatch_queue_.size() >= max_queued_commands) {
+            support::error("risk: command queue full; dropping a command (sentinel may resend)");
+            return;
+        }
+        dispatch_queue_.push_back(command);
+    }
+    dispatch_cv_.notify_one();
+}
+
+void RiskClient::dispatch_loop() {
+    while (true) {
+        domain::Command command;
+        {
+            std::unique_lock lock{dispatch_mutex_};
+            dispatch_cv_.wait(lock, [this] { return dispatch_stop_ || !dispatch_queue_.empty(); });
+            if (dispatch_stop_) {
+                if (!dispatch_queue_.empty()) {
+                    support::warn("risk: discarding {} queued command(s) on stop",
+                                  dispatch_queue_.size());
+                }
+                return;
+            }
+            command = dispatch_queue_.front();
+            dispatch_queue_.pop_front();
+        }
+        // May wait for shard ingress space (ADR-0013); only this thread waits.
+        if (!ingress_.broadcast(command)) {
+            support::warn("risk: broadcast failed (shutting down)");
+        }
     }
 }
 
@@ -348,9 +394,7 @@ void RiskClient::on_accept(const std::string& sentinel_id) {
     // release: pairs with the acquire in session_established(); publishes the
     // session state set up before this point to threads that observe `true`.
     established_.store(true, std::memory_order_release);
-    if (!ingress_.broadcast(domain::RiskLinkStatus{.connected = true})) {
-        support::warn("risk: could not journal link-up (shutting down)");
-    }
+    dispatch(domain::RiskLinkStatus{.connected = true}, false);
 }
 
 void RiskClient::on_command(const v1::RiskCommand& command) {
@@ -361,9 +405,7 @@ void RiskClient::on_command(const v1::RiskCommand& command) {
         return;
     }
     support::info("risk: command {} received ({})", command.command_id(), command.reason());
-    if (!ingress_.broadcast(*decoded)) {
-        support::warn("risk: command {} dropped (shutting down)", command.command_id());
-    }
+    dispatch(*decoded, true);
 }
 
 void RiskClient::on_session_done(bool was_established, const std::string& reason) {
@@ -372,9 +414,7 @@ void RiskClient::on_session_done(bool was_established, const std::string& reason
     established_.store(false, std::memory_order_release);
     if (was_established) {
         support::warn("risk: session closed: {}", reason);
-        if (!ingress_.broadcast(domain::RiskLinkStatus{.connected = false})) {
-            support::warn("risk: could not journal link-down (shutting down)");
-        }
+        dispatch(domain::RiskLinkStatus{.connected = false}, false);
     } else {
         support::warn("risk: risk-sentinel unavailable ({}); continuing fail-open", reason);
     }
