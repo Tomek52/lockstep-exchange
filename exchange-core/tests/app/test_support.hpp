@@ -6,6 +6,7 @@
 #include <future>
 #include <memory>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include "lockstep/app/engine.hpp"
@@ -55,5 +56,22 @@ inline std::pair<app::Completion, std::future<app::CommandReply>> reply_future()
 }
 
 inline constexpr auto reply_timeout = std::chrono::seconds{10};
+
+/// Polls `pred` until it returns true or `timeout` elapses. Returns the last
+/// value of `pred`. Never waits for the full timeout when the condition holds
+/// early. Use this instead of a fixed sleep before asserting positive thread
+/// state: a fixed sleep is a property of the machine, not of the code.
+template <typename Predicate>
+[[nodiscard]] bool wait_until(Predicate pred,
+                              std::chrono::milliseconds timeout = std::chrono::seconds{10}) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return pred();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    return true;
+}
 
 }  // namespace lockstep::test

@@ -1,5 +1,6 @@
 // Walking-skeleton test of the threaded pipeline:
 // submit -> ingress -> shard (journal, apply) -> egress -> publisher -> completion.
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -39,6 +40,12 @@ protected:
     void SetUp() override {
         engine.add_subscriber(subscriber);
         engine.start();
+    }
+
+    /// True once every shard has entered the park phase at least once.
+    [[nodiscard]] bool every_shard_parked() const {
+        const std::vector<ShardStats> stats = engine.shard_stats();
+        return std::ranges::all_of(stats, [](const ShardStats& s) { return s.parks >= 1U; });
     }
 };
 
@@ -154,7 +161,13 @@ TEST_F(EnginePipelineTest, IdleShardParksRatherThanPolling) {
     // after settling (it must have reached the park phase by then) and an
     // absolute ceiling after the full idle window (it must not be spinning)
     // avoids that false failure while still catching both bugs.
-    std::this_thread::sleep_for(std::chrono::milliseconds{20});
+    //
+    // The wait is a condition, not a fixed sleep (task 020): how long the
+    // shard thread needs to get scheduled through the spin and yield phases
+    // depends on machine load. A shard that never parks still fails here, by
+    // timing out.
+    EXPECT_TRUE(test::wait_until([this] { return every_shard_parked(); }))
+        << "a shard never reached the park phase";
     const std::vector<ShardStats> after_settle = engine.shard_stats();
     std::this_thread::sleep_for(std::chrono::milliseconds{200});
     const std::vector<ShardStats> after_idle = engine.shard_stats();
@@ -173,7 +186,9 @@ TEST_F(EnginePipelineTest, IdleShardParksRatherThanPolling) {
 }
 
 TEST_F(EnginePipelineTest, StopReturnsPromptlyOnIdleEngine) {
-    std::this_thread::sleep_for(std::chrono::milliseconds{20});  // let it actually park first
+    // Make sure the shard is actually parked first; stopping a parked engine
+    // is the case under test.
+    EXPECT_TRUE(test::wait_until([this] { return every_shard_parked(); }));
     const auto start = std::chrono::steady_clock::now();
     engine.stop();
     const auto elapsed = std::chrono::steady_clock::now() - start;
