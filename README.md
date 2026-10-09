@@ -149,7 +149,7 @@ ROADMAP.md                milestones → task specs
 | Risk loop: handshake, inbound commands, execution reports, ack aggregation across shards, heartbeats, reconnect with back-off | ✅ ([task 014](docs/tasks/014-risk-client-adapter.md)) |
 | Write-ahead journal on disk: one file per shard, CRC32C-checked records, `--journal-dir`, `--fsync=none\|commit` | ✅ writer ([task 008](docs/tasks/008-journal-writer.md)); lazy `std::generator` reader, torn-tail recovery, `journal-dump` and a decoder fuzzer ([task 009](docs/tasks/009-journal-reader.md)); recover/replay/resume a restart and a `lockstep-replay` digest tool ([task 010](docs/tasks/010-deterministic-replay.md), [ADR-0020](docs/adr/0020-journal-restart-recover-replay-resume.md)) |
 | Deterministic replay test (live vs replay, in memory and on disk, crash recovery, restart) | ✅ ([task 010](docs/tasks/010-deterministic-replay.md)) |
-| Market data stream | ⏳ task 013 |
+| Market data stream: `MarketDataService.Subscribe` with instrument and kind filters, slow consumers disconnected with `RESOURCE_EXHAUSTED` | ✅ ([task 013](docs/tasks/013-grpc-market-data.md)) |
 | risk-sentinel position/limit engine | ✅ pure positions, PnL and limits ([task 015](docs/tasks/015-sentinel-positions-pnl.md)); Monitor session logic ⏳ task 016 |
 
 Verified locally on the skeleton (WSL2, Ubuntu 24.04):

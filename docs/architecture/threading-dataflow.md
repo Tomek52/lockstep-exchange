@@ -52,8 +52,33 @@ flowchart LR
 | risk client callbacks | nothing | Monitor stream | risk client dispatch queue (never blocks) |
 | risk client dispatcher | nothing | dispatch queue (FIFO: link status, risk commands) | every shard ingress (broadcast; may wait for space) |
 | risk client manager | the live Monitor session | - | Monitor stream (heartbeats, reconnect with back-off) |
+| market data `on_ready` hook | nothing | - | one flag per stream and the dispatcher's wake-up flag (lock-free, never blocks, never starts a gRPC operation) |
+| market data dispatcher | the deletion of finished streams | wake-up flag, per-stream flags | starts the next write of woken streams (`StartWrite`, `Finish`) |
 | shard *k* | `ShardEngine` *k* (books, risk state), journal *k*, sequence counter | ingress *k* | egress *k* (SPSC) |
 | publisher | `subscriptions_` list, `Subscription` control queue | all egress queues, subscription control queue (MPSC) | `EventSubscriber`s, `Subscription` rings, completions |
+
+### Market data streams (task 013)
+
+`MarketDataService::Subscribe` creates one `Subscription` per call and streams
+its events with one outstanding `StartWrite`. Which thread may call
+`StartWrite`/`Finish` on a stream is decided by a hand-over flag (`pumping_`):
+whoever sets it owns the stream's buffers until its write completes, then
+`OnWriteDone` (a gRPC thread) continues, or the stream goes idle and releases
+the flag. A wake-up that races with the release is not lost: the waker sets
+`again_` before trying to take the flag and the releaser re-checks `again_`
+after dropping it, both seq_cst (two independent atomics in a store-then-load
+handshake, so acquire/release would not be enough).
+
+The publisher's `on_ready()` hook does *not* call into gRPC. gRPC may run a
+completion callback inline on the thread that started the operation, and
+`Subscription::cancel()` (called from `OnDone`) waits for a running hook, so a
+hook that finished the call could wait for itself. The hook only sets two
+flags and wakes one dispatcher thread, which does the gRPC calls and is also
+the only thread that deletes finished streams.
+
+A client that stops reading entirely cannot be finished while a write is
+outstanding, so it keeps its stream until it disconnects; it costs one ring
+buffer plus gRPC's flow-control window and never slows the publisher.
 
 ### Runtime subscriptions (task 011)
 

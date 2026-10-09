@@ -39,7 +39,8 @@ All interfaces are defined once in [`proto/lockstep/v1`](../../proto/lockstep/v1
 
 - `OrderEntryService`: unary `SubmitOrder` / `CancelOrder` / `ModifyOrder`
   returning a `CommandAck` stamped with `(shard_id, shard_sequence)`.
-- `MarketDataService.Subscribe`: server stream of trades and level updates
-  (task 013).
+- `MarketDataService.Subscribe`: server stream of trades, level updates and
+  instrument status, one event per message, public data only
+  ([task 013](../tasks/013-grpc-market-data.md)).
 - `RiskSentinelService.Monitor`: the bidirectional risk session
   ([ADR-0013](../adr/0013-risk-feedback-loop.md)).
