@@ -125,6 +125,7 @@ nav:
       - tasks/017-loadgen.md
       - tasks/018-benchmarks.md
       - tasks/019-e2e-kill-switch.md
+      - tasks/020-stabilize-idle-park-test.md
   - Workflow:
       - ai-workflow.md
       - agent-rules.md

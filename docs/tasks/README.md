@@ -33,6 +33,7 @@ definition of done in CLAUDE.md holds.
 | [017](017-loadgen.md) | Load generator: concurrency, rate, scenarios | rust/lockstep-loadgen | – | A |
 | [018](018-benchmarks.md) | Benchmarks with latency percentiles | bench | 002, 005, 006 | C |
 | [019](019-e2e-kill-switch.md) | End-to-end kill-switch scenario | scripts, CI | 002, 004, 010, 014, 016, 017 | D |
+| [020](020-stabilize-idle-park-test.md) | Stabilise the idle-parking test under CPU load | tests/app | – | A |
 
 ## Parallel waves
 
@@ -99,6 +100,7 @@ files listed below, where the expected edit is a one-line addition.
 | `rust/crates/risk-sentinel/src/{service,session}.rs` | 016 |
 | `rust/crates/lockstep-loadgen/**` | 017 |
 | `exchange-core/bench/**` | 018 |
+| `tests/app/engine_pipeline_test.cpp` (idle-parking test), `tests/app/test_support.hpp` (wait helper) | 020 |
 
 **Shared, one-line edits** (rebase and resolve trivially):
 - `app/include/lockstep/app/queues.hpp`: 005, 006.
