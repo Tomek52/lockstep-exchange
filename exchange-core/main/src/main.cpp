@@ -27,6 +27,7 @@
 #include "lockstep/app/router.hpp"
 #include "lockstep/app/shard_runtime.hpp"
 #include "lockstep/domain/shard_engine.hpp"
+#include "lockstep/grpc/market_data_service.hpp"
 #include "lockstep/grpc/order_entry_service.hpp"
 #include "lockstep/grpc/server.hpp"
 #include "lockstep/journal/file_journal_writer.hpp"
@@ -44,6 +45,10 @@
 namespace {
 
 using namespace lockstep;
+
+/// Events buffered per market data subscriber before it is disconnected as
+/// too slow (ADR-0006).
+constexpr std::size_t market_data_buffer_events = 1U << 16U;
 
 void print_fatal(std::string_view message) noexcept {
     try {
@@ -226,7 +231,8 @@ int run(const main_app::Options& options) {
         domain::RiskLinkStatus{.connected = false}};
     engine.start(startup_commands);
     grpc_adapter::OrderEntryService order_entry{engine};
-    grpc_adapter::GrpcServer server{options.listen, {&order_entry}};
+    grpc_adapter::MarketDataService market_data{engine, market_data_buffer_events};
+    grpc_adapter::GrpcServer server{options.listen, {&order_entry, &market_data}};
     if (risk) {
         risk->start();
     }
@@ -238,6 +244,9 @@ int run(const main_app::Options& options) {
     support::info("received signal {}, shutting down", signal);
 
     // Shutdown protocol: stop every producer, then the engine (ADR-0003).
+    // Market data streams never end by themselves; close them first so the
+    // server does not wait out its grace period for them.
+    market_data.close_streams();
     server.shutdown(std::chrono::seconds{2});
     if (risk) {
         risk->stop();

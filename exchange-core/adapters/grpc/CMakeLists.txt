@@ -1,6 +1,6 @@
-# Driving adapter: gRPC services (callback API). Task 013 adds
-# src/market_data_service.cpp here.
+# Driving adapter: gRPC services (callback API).
 add_library(lockstep_adapter_grpc STATIC
+  src/market_data_service.cpp
   src/order_entry_service.cpp
   src/server.cpp)
 add_library(lockstep::adapter_grpc ALIAS lockstep_adapter_grpc)

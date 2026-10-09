@@ -46,7 +46,7 @@ enforces that ([ADR-0002](../adr/0002-hexagonal-architecture-enforced-by-the-bui
 flowchart TB
     subgraph adapters["Adapters  (may use gRPC, protobuf, files)"]
         direction LR
-        grpc["<b>grpc</b><br/>OrderEntryService<br/>MarketDataService (task 013)<br/>GrpcServer"]
+        grpc["<b>grpc</b><br/>OrderEntryService<br/>MarketDataService<br/>GrpcServer"]
         risk["<b>risk_client</b><br/>Monitor session<br/>→ broadcast risk commands"]
         codec["<b>codec</b><br/>proto ⇄ domain<br/>(fuzzed)"]
         jrnl["<b>journal</b><br/>binary format, CRC32C, FileJournalWriter,<br/>MemoryJournal,<br/>FileJournalReader, recover_tail,<br/>recover_for_restart (ADR-0020)"]

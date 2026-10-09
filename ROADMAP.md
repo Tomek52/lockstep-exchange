@@ -50,7 +50,7 @@ The two services cooperate; clients can watch the market.
 - [x] [014 Risk client: reports, ack aggregation, reconnect](docs/tasks/014-risk-client-adapter.md)
 - [x] [015 Sentinel positions, PnL and limit engine](docs/tasks/015-sentinel-positions-pnl.md)
 - [ ] [016 Sentinel Monitor session logic](docs/tasks/016-sentinel-monitor-service.md)
-- [ ] [013 MarketDataService.Subscribe](docs/tasks/013-grpc-market-data.md)
+- [x] [013 MarketDataService.Subscribe](docs/tasks/013-grpc-market-data.md)
 
 ## M5: Showcase
 
