@@ -25,8 +25,8 @@ public:
         if (request.has_protocol() && request.protocol().major() != protocol_major) {
             early_status_ = grpc::Status{
                 grpc::StatusCode::FAILED_PRECONDITION,
-                "unsupported protocol version " + std::to_string(request.protocol().major()) +
-                    "." + std::to_string(request.protocol().minor()) + ", server speaks " +
+                "unsupported protocol version " + std::to_string(request.protocol().major()) + "." +
+                    std::to_string(request.protocol().minor()) + ", server speaks " +
                     std::to_string(protocol_major) + "." + std::to_string(protocol_minor)};
             pumping_.store(true);  // nothing to pump; only Finish() below
             return;
@@ -179,8 +179,9 @@ MarketDataService::~MarketDataService() {
     const std::scoped_lock lock{streams_mutex_};
     for (Stream* stream : streams_) {
         if (!stream->done()) {
-            app::fatal("MarketDataService destroyed while a stream is still active; "
-                       "shut the gRPC server down first");
+            app::fatal(
+                "MarketDataService destroyed while a stream is still active; "
+                "shut the gRPC server down first");
         }
         delete stream;
     }
@@ -210,8 +211,8 @@ void MarketDataService::close_streams() noexcept {
 
 std::size_t MarketDataService::active_streams() const {
     const std::scoped_lock lock{streams_mutex_};
-    return static_cast<std::size_t>(std::ranges::count_if(
-        streams_, [](const Stream* stream) { return !stream->done(); }));
+    return static_cast<std::size_t>(
+        std::ranges::count_if(streams_, [](const Stream* stream) { return !stream->done(); }));
 }
 
 void MarketDataService::signal() noexcept {

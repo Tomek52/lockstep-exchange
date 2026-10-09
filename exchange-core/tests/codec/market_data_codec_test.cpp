@@ -80,8 +80,8 @@ TEST(MarketDataCodec, BookLevelChangeMapsFieldByField) {
 
 TEST(MarketDataCodec, InstrumentStatusMapsFieldByField) {
     v1::SubscribeResponse out;
-    ASSERT_TRUE(encode(envelope(domain::InstrumentStatusChanged{domain::InstrumentId{9}, true}),
-                       out));
+    ASSERT_TRUE(
+        encode(envelope(domain::InstrumentStatusChanged{domain::InstrumentId{9}, true}), out));
 
     expect_provenance(out);
     ASSERT_EQ(out.event_case(), v1::SubscribeResponse::kInstrumentStatus);
@@ -127,8 +127,8 @@ TEST(MarketDataCodec, PrivateEventsAreNotPublicAndLeaveNothingBehind) {
 TEST(MarketDataCodec, ReusedBufferDoesNotKeepThePreviousEventKind) {
     v1::SubscribeResponse out;
     ASSERT_TRUE(encode(envelope(sample_trade()), out));
-    ASSERT_TRUE(encode(envelope(domain::InstrumentStatusChanged{domain::InstrumentId{1}, false}),
-                       out));
+    ASSERT_TRUE(
+        encode(envelope(domain::InstrumentStatusChanged{domain::InstrumentId{1}, false}), out));
     EXPECT_EQ(out.event_case(), v1::SubscribeResponse::kInstrumentStatus);
 }
 
