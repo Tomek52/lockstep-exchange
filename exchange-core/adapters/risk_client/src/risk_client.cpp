@@ -55,19 +55,35 @@ public:
         StartCall();
     }
 
-    /// Appends an upstream message. Returns false if the queue is full (the
-    /// caller then drops the session). Thread-safe; never blocks on gRPC.
-    [[nodiscard]] bool enqueue(v1::MonitorRequest&& message, std::size_t bound) {
+    enum class Enqueue : std::uint8_t {
+        Queued,
+        Full,    ///< the queue is at its bound; the caller drops the session
+        Closed,  ///< the stream is cancelled, failed or finished; nothing to do
+    };
+
+    /// Appends an upstream message. Thread-safe; never blocks on gRPC.
+    ///
+    /// Once the stream has failed or finished, gRPC owns (and soon frees) the
+    /// call object that StartWrite() talks to, so a write started after that
+    /// is a use-after-free. `closed_` is set under `write_mutex_` and OnDone()
+    /// takes the same mutex before returning, so a StartWrite() made here
+    /// while `closed_` is false always runs before the call is released.
+    /// (This mutex stands in for gRPC's AddHold()/RemoveHold() for writes made
+    /// from outside a reaction: keep OnDone() taking it.)
+    [[nodiscard]] Enqueue enqueue(v1::MonitorRequest&& message, std::size_t bound) {
         const std::scoped_lock lock{write_mutex_};
-        if (cancelled_ || pending_.size() >= bound) {
-            return false;
+        if (closed_ || cancelled_) {
+            return Enqueue::Closed;
+        }
+        if (pending_.size() >= bound) {
+            return Enqueue::Full;
         }
         pending_.push_back(std::move(message));
         if (!write_in_flight_) {
             write_in_flight_ = true;
             StartWrite(&pending_.front());
         }
-        return true;
+        return Enqueue::Queued;
     }
 
     void OnWriteDone(bool ok) override {
@@ -75,9 +91,17 @@ public:
         if (!pending_.empty()) {
             pending_.pop_front();  // the message that just completed
         }
-        if (!ok || cancelled_ || pending_.empty()) {
+        if (!ok) {
+            // The stream is ending and OnDone follows. Accept no more writes
+            // from here on: the call object may be released any moment.
+            closed_ = true;
+            pending_.clear();
             write_in_flight_ = false;
-            return;  // on !ok the stream is ending; OnDone follows
+            return;
+        }
+        if (cancelled_ || pending_.empty()) {
+            write_in_flight_ = false;
+            return;
         }
         StartWrite(&pending_.front());
     }
@@ -104,6 +128,14 @@ public:
     }
 
     void OnDone(const grpc::Status& status) override {
+        {
+            // After this block no thread starts another write; one that is
+            // inside enqueue() right now finishes first (same mutex).
+            const std::scoped_lock lock{write_mutex_};
+            closed_ = true;
+            pending_.clear();
+            write_in_flight_ = false;
+        }
         owner_.on_session_done(established_, status.error_message());
         {
             const std::scoped_lock lock{done_mutex_};
@@ -147,6 +179,7 @@ private:
     std::deque<v1::MonitorRequest> pending_;
     bool write_in_flight_{true};  // the constructor queues hello and starts its write
     bool cancelled_{false};
+    bool closed_{false};  ///< a write failed or OnDone ran: never call StartWrite again
 
     std::mutex done_mutex_;
     std::condition_variable done_cv_;
@@ -269,7 +302,8 @@ void RiskClient::run() {
             }
             v1::MonitorRequest heartbeat;
             heartbeat.mutable_heartbeat()->set_sent_at_ns(now_ns());
-            if (!session->enqueue(std::move(heartbeat), config_.max_queued_messages)) {
+            if (session->enqueue(std::move(heartbeat), config_.max_queued_messages) ==
+                Session::Enqueue::Full) {
                 support::error("risk: upstream queue full on heartbeat; dropping session");
                 session->cancel();
             }
@@ -333,8 +367,9 @@ void RiskClient::enqueue_upstream(v1::MonitorRequest&& message) {
         if (session_ == nullptr) {
             return;  // no live stream; the sentinel re-derives state after reconnect
         }
-        if (session_->enqueue(std::move(message), config_.max_queued_messages)) {
-            return;
+        const auto result = session_->enqueue(std::move(message), config_.max_queued_messages);
+        if (result != Session::Enqueue::Full) {
+            return;  // queued, or the stream is already ending and the manager reconnects
         }
         session_done_ = true;  // ask the manager to tear down and reconnect
     }

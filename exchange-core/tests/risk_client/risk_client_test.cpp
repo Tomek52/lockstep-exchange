@@ -4,6 +4,7 @@
 // without the real sentinel (task 014, ADR-0013).
 #include "lockstep/risk_client/risk_client.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -559,6 +560,36 @@ TEST(RiskClient, StopDuringBackoffReturnsPromptly) {
     client.stop();
     const auto elapsed = std::chrono::steady_clock::now() - before;
     EXPECT_LT(elapsed, 200ms);
+}
+
+TEST(RiskClient, EventsWhileSessionsChurnDoNotTouchAFinishedStream) {
+    // Regression: the publisher thread kept calling StartWrite on a session
+    // whose stream had already finished (unreachable sentinel: every attempt
+    // dies within milliseconds), which aborted with a pure virtual call. Feed
+    // trades continuously while the client reconnects as fast as it can.
+    RecordingIngress ingress;
+    int dead_port = 0;
+    {
+        SentinelState unused_state;
+        FakeSentinel unused_service{unused_state};
+        const ScopedServer probe{0, unused_service};
+        dead_port = probe.port();
+    }
+    auto config = fast_config(dead_port, 2);
+    config.backoff_base = 1ms;
+    config.backoff_max = 2ms;
+    config.heartbeat_interval = 1ms;
+    RiskClient client{config, ingress};
+    client.start();
+
+    const std::array events{trade_event()};
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        client.on_events(events);
+    }
+    client.stop();
+    // The assertion is surviving: the pre-fix failure was a process abort.
+    EXPECT_FALSE(client.session_established());
 }
 
 }  // namespace

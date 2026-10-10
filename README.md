@@ -151,6 +151,7 @@ ROADMAP.md                milestones → task specs
 | Deterministic replay test (live vs replay, in memory and on disk, crash recovery, restart) | ✅ ([task 010](docs/tasks/010-deterministic-replay.md)) |
 | Market data stream: `MarketDataService.Subscribe` with instrument and kind filters, slow consumers disconnected with `RESOURCE_EXHAUSTED` | ✅ ([task 013](docs/tasks/013-grpc-market-data.md)) |
 | risk-sentinel position/limit engine and Monitor session | ✅ pure positions, PnL and limits ([task 015](docs/tasks/015-sentinel-positions-pnl.md)); execution reports decoded, deduplicated across reconnects, risk commands with unique ids, heartbeats and idle timeout, limits as CLI flags ([task 016](docs/tasks/016-sentinel-monitor-service.md)) |
+| Load generator: `random` / `breach` / `single` scenarios, `--concurrency`, `--rate`, seeded order flow, text and `--json` reports with p50-p99.9, back-pressure retries | ✅ ([task 017](docs/tasks/017-loadgen.md)) |
 
 Verified locally on the skeleton (WSL2, Ubuntu 24.04):
 - all C++ tests on debug, clang-debug, asan-ubsan and tsan;

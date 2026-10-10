@@ -147,7 +147,7 @@ wait_for_log "${logs}/core.log" "session accepted by sentinel" "exchange-core to
 
 echo "==> submitting orders via loadgen"
 "${rust_bin_dir}/loadgen" --target "http://127.0.0.1:${core_port}" \
-  --count 5 --instrument 2 --expect-accepted
+  --scenario single --count 5 --instrument 2 --expect-accepted
 
 echo "==> graceful shutdown"
 kill -TERM "${core_pid}"
@@ -195,7 +195,7 @@ echo "==> submitting more orders after restart"
 # RejectReason::DuplicateClientOrderId - itself proof the restart kept state,
 # but not what this step is checking.
 "${rust_bin_dir}/loadgen" --target "http://127.0.0.1:${core_port}" \
-  --count 5 --trader 2 --instrument 2 --expect-accepted
+  --scenario single --count 5 --trader 2 --instrument 2 --expect-accepted
 
 echo "==> graceful shutdown (restart)"
 kill -TERM "${core_pid}"
