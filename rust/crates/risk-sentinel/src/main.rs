@@ -20,6 +20,17 @@ struct Args {
     /// Identity reported in the session handshake.
     #[arg(long, default_value = "risk-sentinel-1")]
     sentinel_id: String,
+    /// Absolute net position (lots) per trader and instrument before the
+    /// trader is blocked.
+    #[arg(long, default_value_t = RiskLimits::default().max_abs_position, allow_negative_numbers = true)]
+    max_abs_position: i128,
+    /// Loss (tick-lots) per trader before the trader is blocked.
+    #[arg(long, default_value_t = RiskLimits::default().max_trader_loss, allow_negative_numbers = true)]
+    max_trader_loss: i128,
+    /// Aggregate loss (tick-lots) across all traders that engages the kill
+    /// switch.
+    #[arg(long, default_value_t = RiskLimits::default().kill_switch_loss, allow_negative_numbers = true)]
+    kill_switch_loss: i128,
 }
 
 async fn shutdown_signal() {
@@ -40,7 +51,15 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
 
-    let sentinel = Sentinel::new(args.sentinel_id, RiskEngine::new(RiskLimits::default()));
+    let limits = RiskLimits {
+        max_abs_position: args.max_abs_position,
+        max_trader_loss: args.max_trader_loss,
+        kill_switch_loss: args.kill_switch_loss,
+    };
+    limits.validate().map_err(anyhow::Error::msg)?;
+    info!(?limits, "risk limits");
+
+    let sentinel = Sentinel::new(args.sentinel_id, RiskEngine::new(limits));
     info!(listen = %args.listen, "risk-sentinel listening");
     tonic::transport::Server::builder()
         .add_service(RiskSentinelServiceServer::new(sentinel))
