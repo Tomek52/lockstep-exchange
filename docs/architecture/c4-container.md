@@ -13,7 +13,7 @@ flowchart LR
     end
 
     subgraph rust_box["risk-sentinel  [Rust process, tokio + tonic]"]
-        sentinel["gRPC server :50052<br/>Monitor sessions<br/>RiskEngine (pure)"]
+        sentinel["gRPC server :50052<br/>Monitor sessions (session.rs)<br/>RiskEngine (pure)"]
     end
 
     proto{{"<b>proto/lockstep/v1</b><br/><i>[shared contracts]</i><br/>protoc (C++) · tonic-prost-build (Rust)"}}

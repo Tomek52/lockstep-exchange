@@ -75,9 +75,10 @@ impl RiskEngine {
         // their net quantity is what just changed.
         self.check_position(fill.trader, fill.instrument, net_quantity, &mut actions);
 
-        // TODO(task-016): each fill rescans and sorts every position (traders_in,
+        // TODO(perf): each fill rescans and sorts every position (traders_in,
         // trader_pnl per holder, total_pnl); keep per-trader indexes and a
-        // running total if the Monitor stream makes this the hot path.
+        // running total if the Monitor stream makes this the hot path (task 016
+        // did not measure it; task 018 benchmarks may).
         //
         // The fill moved the instrument's mark, so every trader holding it may
         // have a different PnL now, not just the trader who traded. Re-evaluate
@@ -543,8 +544,9 @@ mod tests {
 
     #[test]
     fn extreme_loss_limits_do_not_panic() {
-        // Limits are plain i128 fields until task 016 validates configuration;
-        // even i128::MIN must not panic or wrap into a disabled limit.
+        // Limits are plain i128 fields; the binary rejects negative ones
+        // (`RiskLimits::validate`), but the engine itself must not panic or
+        // wrap into a disabled limit even for i128::MIN.
         let mut engine = RiskEngine::new(RiskLimits {
             max_abs_position: i128::MAX,
             max_trader_loss: Notional::MIN,
