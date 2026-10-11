@@ -109,6 +109,11 @@ impl Client {
 }
 
 fn report(trader: u64, sequence: u64, quantity: u64) -> Upstream {
+    trade(trader, sequence, 0, quantity)
+}
+
+/// The `trade_index`-th trade of the command with `sequence` (task 021).
+fn trade(trader: u64, sequence: u64, trade_index: u32, quantity: u64) -> Upstream {
     Upstream::Execution(ExecutionReport {
         shard_id: 0,
         shard_sequence: sequence,
@@ -120,6 +125,7 @@ fn report(trader: u64, sequence: u64, quantity: u64) -> Upstream {
         price_ticks: 100,
         quantity,
         is_maker: false,
+        trade_index,
     })
 }
 
@@ -173,6 +179,36 @@ async fn reports_replayed_on_a_new_session_are_ignored_and_ids_continue() {
     assert!(matches!(second.next().await, Downstream::Accept(_)));
     second.send(report(42, 1, 6)).await; // replay: 6 lots must count once
     second.send(report(42, 2, 5)).await; // 6 + 5 = 11 > 10
+
+    expect_block(second.next_non_heartbeat().await, 1, 42);
+}
+
+#[tokio::test]
+async fn a_sweeping_order_is_fully_accounted_for() {
+    // Task 021: one command, two trades of 6 lots (limit 10), same sequence.
+    let mut client = Client::connect(&start_server(SessionConfig::default()).await).await;
+    assert!(matches!(client.next().await, Downstream::Accept(_)));
+
+    client.send(trade(42, 5, 0, 6)).await;
+    client.send(trade(42, 5, 1, 6)).await;
+
+    expect_block(client.next_non_heartbeat().await, 1, 42);
+}
+
+#[tokio::test]
+async fn a_sweep_replayed_on_a_new_session_counts_once() {
+    let url = start_server(SessionConfig::default()).await;
+    let mut first = Client::connect(&url).await;
+    assert!(matches!(first.next().await, Downstream::Accept(_)));
+    first.send(trade(42, 5, 0, 4)).await;
+    first.send(trade(42, 5, 1, 4)).await;
+    drop(first);
+
+    let mut second = Client::connect(&url).await;
+    assert!(matches!(second.next().await, Downstream::Accept(_)));
+    second.send(trade(42, 5, 0, 4)).await; // replay
+    second.send(trade(42, 5, 1, 4)).await; // replay
+    second.send(trade(42, 5, 2, 3)).await; // 4 + 4 + 3 = 11 > 10
 
     expect_block(second.next_non_heartbeat().await, 1, 42);
 }

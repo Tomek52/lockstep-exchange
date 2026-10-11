@@ -8,6 +8,8 @@
 # 2. risk-sentinel blocks them (BlockTrader sent, CommandApplied received);
 # 3. exchange-core rejects them with TRADER_BLOCKED while other traders keep
 #    getting accepts (a concurrent loadgen `random` run);
+# 3b. a buy that sweeps two resting sells (one command, two trades) is blocked
+#    only if the sentinel counts both fills (task 021, ADR-0022);
 # 4. a falling market of many moderate losses (loadgen `loss`) pushes the
 #    gross loss over the limit (ADR-0021): the sentinel engages the kill
 #    switch and every later order, from any trader, gets TRADING_HALTED;
@@ -119,7 +121,7 @@ wait_for_log "${logs}/sentinel.log" "risk-sentinel listening" "sentinel to liste
 
 echo "==> starting exchange-core on :${core_port}"
 "${core_bin}" --listen="127.0.0.1:${core_port}" --risk-sentinel="127.0.0.1:${sentinel_port}" \
-  --shards=2 --instruments=1,2,3,4 --journal-dir="${journal_dir}" --print-digest-on-exit \
+  --shards=2 --instruments=1,2,3,4,5 --journal-dir="${journal_dir}" --print-digest-on-exit \
   >"${logs}/core.log" 2>&1 &
 core_pid=$!
 wait_for_log "${logs}/core.log" "exchange-core listening" "exchange-core to listen"
@@ -167,6 +169,28 @@ for reason in REJECT_REASON_TRADER_BLOCKED REJECT_REASON_TRADING_HALTED; do
     || fail "a random trader was rejected with ${reason}"
 done
 
+# ---------------------------------------------------------------- 3b: sweep
+# Task 021 / ADR-0022. Instrument 5 is nobody else's, so its mark never moves
+# and the two traders below end with a PnL of zero (the loss scenario must be
+# the only thing that raises the gross loss). Two resting sells of 1 500 lots
+# and one buy of 3 000 that takes both: one command, two trades, one shard
+# sequence. Each fill alone is under --max-abs-position (2 000); only the sum
+# is over it, so the BlockTrader below exists only if the sentinel accounts for
+# the second trade as well.
+echo "==> a buy that sweeps two resting sells on instrument 5 is fully accounted for"
+"${loadgen_bin}" --target "${target}" --scenario single --instrument 5 --price 100 --quantity 1500 \
+  --side sell --trader 9001 --count 2 --expect-accepted >"${logs}/sweep-sells.out" 2>&1 \
+  || { cat "${logs}/sweep-sells.out"; fail "the two resting sells were not accepted"; }
+"${loadgen_bin}" --target "${target}" --scenario single --instrument 5 --price 100 --quantity 3000 \
+  --side buy --trader 9002 --count 1 --expect-accepted >"${logs}/sweep-buy.out" 2>&1 \
+  || { cat "${logs}/sweep-buy.out"; fail "the sweeping buy was not accepted"; }
+wait_for_log "${logs}/sentinel.log" "risk command sent.*BlockTrader \{ trader: 9002" \
+  "sentinel to block 9002 after the sweep (both fills counted)"
+wait_for_log "${logs}/sentinel.log" "risk command applied by exchange.*BlockTrader \{ trader: 9002" \
+  "CommandApplied for the BlockTrader of 9002"
+grep -E "risk command (sent|applied by exchange).*BlockTrader \{ trader: 9002" "${logs}/sentinel.log" \
+  | sed 's/^/    /'
+
 # ---------------------------------------------------------------- 4: halt
 echo "==> a falling market of many moderate losses on instrument 1 (loss)"
 "${loadgen_bin}" --target "${target}" --scenario loss --instrument 1 >"${logs}/loss.out" 2>&1 \
@@ -205,7 +229,7 @@ grep -q "exchange-core stopped cleanly" "${logs}/core.log"
 
 echo "==> lockstep-replay digest vs --print-digest-on-exit"
 from_core="$(grep -E '^shard [0-9]+: ' "${logs}/core.log")"
-from_replay="$("${replay_bin}" --journal-dir="${journal_dir}" --shards=2 --instruments=1,2,3,4)"
+from_replay="$("${replay_bin}" --journal-dir="${journal_dir}" --shards=2 --instruments=1,2,3,4,5)"
 echo "    exchange-core:"; echo "${from_core}" | sed 's/^/      /'
 echo "    lockstep-replay:"; echo "${from_replay}" | sed 's/^/      /'
 [[ -n "${from_core}" && "${from_core}" == "${from_replay}" ]] \

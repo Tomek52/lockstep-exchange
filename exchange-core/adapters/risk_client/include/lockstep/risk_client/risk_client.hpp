@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -127,6 +128,21 @@ private:
     /// consumed by an ack. Per shard (not a bare total) so a duplicate from one
     /// shard can never stand in for another shard's apply.
     std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> applied_counts_;
+
+    /// Per shard: the sequence of the last Trade forwarded and how many trades
+    /// of that sequence have been seen so far. A command that sweeps the book
+    /// emits several Trades with one sequence; the count is the report's
+    /// trade_index (ADR-0022). Kept across on_events calls because a command's
+    /// events can be split between them. Touched only by on_events, i.e. by the
+    /// publisher thread, so it needs no lock.
+    struct TradeCounter {
+        std::uint64_t sequence{0};
+        std::uint32_t next_index{0};
+    };
+    std::vector<TradeCounter> trade_counters_;
+
+    /// The trade_index for the next Trade of `shard` with `sequence`.
+    [[nodiscard]] std::uint32_t next_trade_index(std::size_t shard, std::uint64_t sequence);
 };
 
 }  // namespace lockstep::risk_client

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include "lockstep/app/messages.hpp"
 #include "lockstep/domain/events.hpp"
@@ -18,9 +19,15 @@ namespace lockstep::codec {
 /// sequence, timestamp) so the sentinel can dedupe after a reconnect
 /// (ADR-0013).
 ///
+/// All events of one command share its shard sequence, and a command that
+/// sweeps several resting orders emits several Trades. `trade_index` is the
+/// zero-based position of this Trade among the Trades of that command; with
+/// the shard id, the sequence and `is_maker` it identifies a report
+/// (ADR-0022). The caller counts, because the encoding is stateless.
+///
 /// `event` must carry a domain::Trade; the shard id, sequence and timestamp
 /// come from the PublishedEvent envelope.
 [[nodiscard]] std::array<v1::ExecutionReport, 2> encode_execution_reports(
-    const app::PublishedEvent& event, const domain::Trade& trade);
+    const app::PublishedEvent& event, const domain::Trade& trade, std::uint32_t trade_index);
 
 }  // namespace lockstep::codec
