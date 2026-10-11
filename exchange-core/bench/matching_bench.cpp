@@ -48,10 +48,11 @@ public:
     CommandResult apply(const Command& command) {
         events_.clear();
         ++sequence_;
-        return engine_.apply(SequencedCommand{.sequence = SequenceNumber{sequence_},
-                                              .timestamp = Timestamp{1'000 + static_cast<std::int64_t>(sequence_)},
-                                              .command = command},
-                             events_);
+        return engine_.apply(
+            SequencedCommand{.sequence = SequenceNumber{sequence_},
+                             .timestamp = Timestamp{1'000 + static_cast<std::int64_t>(sequence_)},
+                             .command = command},
+            events_);
     }
 
     [[nodiscard]] const ShardEngine& engine() const noexcept { return engine_; }
@@ -91,8 +92,9 @@ void bm_rest_and_cancel(benchmark::State& state) {
         const bool buy = (n % 2) == 0;
         // Buys strictly below mid, sells strictly above: nothing ever crosses.
         const std::int64_t offset = 1 + static_cast<std::int64_t>((n / 2) % price_levels);
-        const NewOrder order = limit(buy ? Side::Buy : Side::Sell,
-                                     buy ? mid_price - offset : mid_price + offset, 10, ++client_id);
+        const NewOrder order =
+            limit(buy ? Side::Buy : Side::Sell, buy ? mid_price - offset : mid_price + offset, 10,
+                  ++client_id);
         ++n;
         const auto result = driver.apply(order);
         if (!result) {
@@ -113,14 +115,14 @@ void bm_rest_and_cancel(benchmark::State& state) {
     for (auto _ : state) {
         const std::int64_t offset = 1 + static_cast<std::int64_t>((n / 2) % price_levels);
         const bool buy = (n % 2) == 0;
-        const Command new_order = limit(buy ? Side::Buy : Side::Sell,
-                                        buy ? mid_price - offset : mid_price + offset, 10,
-                                        ++client_id);
+        const Command new_order =
+            limit(buy ? Side::Buy : Side::Sell, buy ? mid_price - offset : mid_price + offset, 10,
+                  ++client_id);
         ++n;
         CommandResult added = std::unexpected{RejectReason::UnknownOrder};
         samples.measure([&] { added = driver.apply(new_order); });
-        const Command cancel =
-            CancelOrder{.trader = trader, .instrument = instrument_one, .order_id = resting.front()};
+        const Command cancel = CancelOrder{
+            .trader = trader, .instrument = instrument_one, .order_id = resting.front()};
         CommandResult cancelled = std::unexpected{RejectReason::UnknownOrder};
         samples.measure([&] { cancelled = driver.apply(cancel); });
         ok = ok && added.has_value() && cancelled.has_value();

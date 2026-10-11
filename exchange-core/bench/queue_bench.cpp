@@ -126,7 +126,8 @@ void bm_contended(benchmark::State& state) {
         }
     }
     all.report(state);
-    state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(producers * per_producer));
+    state.SetItemsProcessed(state.iterations() *
+                            static_cast<std::int64_t>(producers * per_producer));
     state.counters["producers"] = static_cast<double>(producers);
     state.counters["pinned"] = lockstep::bench::pinning_enabled() ? 1.0 : 0.0;
 }

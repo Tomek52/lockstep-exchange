@@ -24,7 +24,6 @@
 #include <utility>
 
 #include <benchmark/benchmark.h>
-#include <unistd.h>
 
 #include "lockstep/app/engine.hpp"
 #include "lockstep/app/ports/clock.hpp"
@@ -36,6 +35,7 @@
 
 #include "percentiles.hpp"
 #include "pinning.hpp"
+#include <unistd.h>
 
 namespace {
 
@@ -110,8 +110,8 @@ void bm_submit_round_trip(benchmark::State& state) {
     }
     const ScratchDir dir;
     app::SystemClock clock;
-    app::Engine engine{std::move(config), journal_factory(Kind, dir, static_cast<std::uint32_t>(shards)),
-                       clock};
+    app::Engine engine{std::move(config),
+                       journal_factory(Kind, dir, static_cast<std::uint32_t>(shards)), clock};
     engine.start();
     const lockstep::bench::ScopedPin pin{0};
 
@@ -122,18 +122,20 @@ void bm_submit_round_trip(benchmark::State& state) {
     std::size_t step = 0;
 
     for (auto _ : state) {
-        const domain::InstrumentId instrument{static_cast<std::uint32_t>(1 + ((step / 2) % shards))};
+        const domain::InstrumentId instrument{
+            static_cast<std::uint32_t>(1 + ((step / 2) % shards))};
         const domain::Side side = (step % 2 == 0) ? domain::Side::Sell : domain::Side::Buy;
         ++step;
         const domain::Command command = limit(instrument, side, ++client_id);
         samples.measure([&] {
             done.store(false);
-            const auto submitted = engine.submit(command, [&done, &ok](const app::CommandReply& reply) noexcept {
-                if (!reply.result) {
-                    ok = false;  // read only after the loop; published by done.store below
-                }
-                done.store(true);
-            });
+            const auto submitted =
+                engine.submit(command, [&done, &ok](const app::CommandReply& reply) noexcept {
+                    if (!reply.result) {
+                        ok = false;  // read only after the loop; published by done.store below
+                    }
+                    done.store(true);
+                });
             if (!submitted) {
                 ok = false;
                 return;
