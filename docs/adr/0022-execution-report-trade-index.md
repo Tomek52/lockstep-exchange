@@ -1,6 +1,6 @@
 # 22. Execution reports carry a per-command trade index
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-11
 - **Amends:** [ADR-0013](0013-risk-feedback-loop.md#adr0013-idempotency-v1) (the sentinel's duplicate-report key) and [task 016](../tasks/016-sentinel-monitor-service.md)
 

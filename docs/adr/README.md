@@ -27,7 +27,7 @@ decision; a new ADR supersedes it and the old one's status says so.
 | [0019](0019-configuration-format.md) | Configuration format (JSON, nlohmann) and parser | Accepted |
 | [0020](0020-journal-restart-recover-replay-resume.md) | Journal restart: recover, replay, resume appending | Accepted |
 | [0021](0021-sentinel-kill-switch-on-gross-loss.md) | Sentinel kill switch trips on gross loss, not net total PnL | Accepted |
-| [0022](0022-execution-report-trade-index.md) | Execution reports carry a per-command trade index | Proposed |
+| [0022](0022-execution-report-trade-index.md) | Execution reports carry a per-command trade index | Accepted |
 
 To add one: copy the structure of any ADR, take the next number, add it to
 this table, and link it from the code or task spec that motivated it.
