@@ -1,6 +1,6 @@
 # 21. Sentinel kill switch trips on gross loss, not net total PnL
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-11
 - **Amends:** [task 015](../tasks/015-sentinel-positions-pnl.md) rule "engage the kill switch when `total_pnl < -kill_switch_loss`"
 
