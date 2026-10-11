@@ -35,7 +35,7 @@ std::vector<std::int64_t> clustered_prices(std::size_t count, std::int64_t sprea
 }
 
 template <typename Map>
-void BM_LevelUpsertErase(benchmark::State& state) {
+void bm_level_upsert_erase(benchmark::State& state) {
     const auto spread = state.range(0);
     const auto prices = clustered_prices(1U << 16U, spread);
     lockstep::bench::LatencySamples samples;
@@ -61,7 +61,7 @@ void BM_LevelUpsertErase(benchmark::State& state) {
 }
 
 template <typename Map>
-void BM_BestLevelLookup(benchmark::State& state) {
+void bm_best_level_lookup(benchmark::State& state) {
     Map levels;
     for (std::int64_t p = 0; p < state.range(0); ++p) {
         levels.try_emplace(10'000 - p);
@@ -75,9 +75,17 @@ void BM_BestLevelLookup(benchmark::State& state) {
 using FlatBids = flat_map<std::int64_t, Level, std::greater<>>;
 using TreeBids = std::map<std::int64_t, Level, std::greater<>>;
 
-BENCHMARK(BM_LevelUpsertErase<FlatBids>)->Name("upsert_erase/flat_map")->Arg(16)->Arg(64)->Arg(512);
-BENCHMARK(BM_LevelUpsertErase<TreeBids>)->Name("upsert_erase/std::map")->Arg(16)->Arg(64)->Arg(512);
-BENCHMARK(BM_BestLevelLookup<FlatBids>)->Name("best_level/flat_map")->Arg(64);
-BENCHMARK(BM_BestLevelLookup<TreeBids>)->Name("best_level/std::map")->Arg(64);
+BENCHMARK(bm_level_upsert_erase<FlatBids>)
+    ->Name("upsert_erase/flat_map")
+    ->Arg(16)
+    ->Arg(64)
+    ->Arg(512);
+BENCHMARK(bm_level_upsert_erase<TreeBids>)
+    ->Name("upsert_erase/std::map")
+    ->Arg(16)
+    ->Arg(64)
+    ->Arg(512);
+BENCHMARK(bm_best_level_lookup<FlatBids>)->Name("best_level/flat_map")->Arg(64);
+BENCHMARK(bm_best_level_lookup<TreeBids>)->Name("best_level/std::map")->Arg(64);
 
 }  // namespace

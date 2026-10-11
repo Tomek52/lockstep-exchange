@@ -99,7 +99,7 @@ files listed below, where the expected edit is a one-line addition.
 | `rust/crates/risk-sentinel/src/{positions,limits,engine}.rs` | 015 |
 | `rust/crates/risk-sentinel/src/{service,session}.rs` | 016 |
 | `rust/crates/lockstep-loadgen/**` | 017 |
-| `exchange-core/bench/**` | 018 |
+| `exchange-core/bench/**`, `scripts/run-benchmarks.sh` | 018 |
 | `tests/app/engine_pipeline_test.cpp` (idle-parking test), `tests/app/test_support.hpp` (wait helper) | 020 |
 
 **Shared, one-line edits** (rebase and resolve trivially):
