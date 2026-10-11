@@ -99,7 +99,7 @@ sentinel_port="${SENTINEL_PORT:-${default_ports[1]}}"
 
 # True if something accepts connections on 127.0.0.1:<port>.
 port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-require_port_free() {  # <port> <what>
+require_port_free() {  # <port> <what> <name of the env var that overrides it>
   if port_in_use "$1"; then
     echo "port $1 ($2) is already in use; stop that process or set ${3} to a free port" >&2
     exit 1
