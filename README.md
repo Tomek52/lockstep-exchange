@@ -187,12 +187,12 @@ ROADMAP.md                milestones → task specs
 
 ## Project status
 
-**Milestone M0 (walking skeleton) is complete.** What works today:
+**All milestones of the [roadmap](ROADMAP.md) (M0 to M5, tasks 001-022) are complete.** What works today:
 
 | Area | Status |
 |---|---|
 | Build: CMake presets (debug, release, clang-debug, asan-ubsan, tsan), feature probe, architecture rules | ✅ |
-| CI: C++ on 5 presets, clang-tidy, fuzzing, Rust, proto checks, e2e, Docker | ✅ all 11 jobs green on GitHub Actions |
+| CI: C++ on 5 presets, clang-tidy, fuzzing, Rust, proto checks, e2e, Docker | ✅ all 12 jobs green on `main` (11 on pull requests; the Docker job only builds the images and runs on pushes) |
 | Contracts: `lockstep.v1` protos, codegen in CMake and `build.rs` | ✅ |
 | Domain: strong types, validation, pooled order book with O(1) cancel, price-time matching, modify (cancel/replace), duplicate client order id rejection, and risk controls (block, kill switch, link policy) | ✅ |
 | Runtime: shards + publisher on `std::jthread`, write-ahead ordering, lossless shutdown | ✅ lock-free SPSC egress ([task 005](docs/tasks/005-spsc-queue.md)) and MPSC ingress ([task 006](docs/tasks/006-mpsc-queue.md)); threads park on a `Doorbell` instead of polling, with runtime stats exposed ([task 007](docs/tasks/007-runtime-idle-and-stats.md)); runtime subscriptions with filtering and a slow-consumer policy ([task 011](docs/tasks/011-publisher-fanout.md)) |
@@ -206,15 +206,21 @@ ROADMAP.md                milestones → task specs
 | Benchmarks: matching, queues and in-process engine round trip with p50/p99/p99.9, `scripts/run-benchmarks.sh` | ✅ ([task 018](docs/tasks/018-benchmarks.md), results below) |
 | Load generator: `random` / `breach` / `loss` / `single` scenarios, `--concurrency`, `--rate`, seeded order flow, text and `--json` reports with p50-p99.9, back-pressure retries | ✅ ([task 017](docs/tasks/017-loadgen.md)) |
 
-Verified locally on the skeleton (WSL2, Ubuntu 24.04):
-- all C++ tests on debug, clang-debug, asan-ubsan and tsan;
-- clang-tidy clean;
+Verified on 2026-10-11 (WSL2, Ubuntu 24.04), with the definition-of-done
+script on the task 021 branch and by hand:
+- all C++ tests on debug, release, clang-debug, asan-ubsan and tsan, and the
+  architecture tests;
+- clang-format and clang-tidy clean;
 - cargo fmt, clippy (`-D warnings`) and tests;
-- buf lint;
-- the e2e smoke test;
-- the compose stack (200/200 orders accepted).
+- buf lint, format and breaking checks;
+- the e2e smoke test (flags and `--config`) and the risk-loop scenario
+  `scripts/e2e-kill-switch.sh`, also with 32 busy-loop processes on 8 cores;
+- the compose stack: `up --build --wait`, then the `random` loadgen profile
+  (1 000 operations: 957 accepted, 43 rejected with `UNKNOWN_ORDER`, no
+  errors), then `down`.
 
-GitHub Actions: all 11 jobs passed on the first run after publishing (run 36348820151).
+GitHub Actions: all 12 jobs passed on `main` after the last merge (commit
+`184a9de`, run 38171406627).
 
 ## Benchmark results
 
