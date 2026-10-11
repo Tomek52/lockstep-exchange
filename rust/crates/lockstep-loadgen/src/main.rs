@@ -1,7 +1,7 @@
 //! loadgen: drives order flow into exchange-core's `OrderEntryService` and
 //! reports outcome counts and round-trip latency percentiles.
 //!
-//! Scenarios (`--scenario`): `random` (default), `breach`, `single`.
+//! Scenarios (`--scenario`): `random` (default), `breach`, `loss`, `single`.
 //! See docs/tasks/017-loadgen.md.
 
 mod rate;
@@ -24,13 +24,29 @@ use tonic::metadata::{Ascii, MetadataValue};
 use tonic::transport::Channel;
 
 use crate::rate::Pacer;
-use crate::report::{BreachReport, Stats};
-use crate::scenario::{Action, Breach, Outcome, RandomFlow, Rng, Single};
+use crate::report::{BreachReport, Extra, LossReport, Stats};
+use crate::scenario::{Action, Breach, Loss, Outcome, RandomFlow, Rng, Single};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum CliSide {
     Buy,
     Sell,
+}
+
+/// Rejection reasons `--expect-rejected` can name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum CliReject {
+    TraderBlocked,
+    TradingHalted,
+}
+
+impl From<CliReject> for RejectReason {
+    fn from(reason: CliReject) -> Self {
+        match reason {
+            CliReject::TraderBlocked => Self::TraderBlocked,
+            CliReject::TradingHalted => Self::TradingHalted,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -39,6 +55,9 @@ enum ScenarioName {
     Random,
     /// Trader 666 buys aggressively until blocked; exits non-zero if never blocked.
     Breach,
+    /// A falling market of many moderate losses until the exchange is halted
+    /// (kill switch); exits non-zero if trading is never halted.
+    Loss,
     /// Identical orders (the original behaviour).
     Single,
 }
@@ -48,6 +67,7 @@ impl ScenarioName {
         match self {
             Self::Random => "random",
             Self::Breach => "breach",
+            Self::Loss => "loss",
             Self::Single => "single",
         }
     }
@@ -73,7 +93,7 @@ struct Args {
     /// Send as fast as responses come back (the default).
     #[arg(long)]
     unlimited: bool,
-    /// Run for this many seconds. Defaults: random 10, breach 30.
+    /// Run for this many seconds. Defaults: random 10, breach 30, loss 30.
     #[arg(long, conflicts_with = "count")]
     duration: Option<u64>,
     /// Stop after this many operations. Default for `single`: 1.
@@ -112,6 +132,9 @@ struct Args {
     /// Exit with an error unless every operation is accepted.
     #[arg(long)]
     expect_accepted: bool,
+    /// Exit with an error unless every operation is rejected with this reason.
+    #[arg(long, value_enum, conflicts_with = "expect_accepted")]
+    expect_rejected: Option<CliReject>,
     /// Give up connecting after this long (the exchange may still be starting).
     #[arg(long, default_value = "10")]
     connect_timeout_secs: u64,
@@ -363,6 +386,44 @@ async fn breach(
     (stats, report)
 }
 
+/// Many fresh traders in a falling market until the exchange halts trading.
+async fn loss(mut client: Client, instrument_id: u32, shared: Arc<Shared>) -> (Stats, LossReport) {
+    let mut stats = Stats::new();
+    let mut jitter = Rng::for_worker(0, u64::MAX);
+    let mut flow = Loss::new(instrument_id);
+    let mut first_fill: Option<Instant> = None;
+    let mut report = LossReport::default();
+    while !shared.expired() && shared.take_ticket() {
+        shared.pacer.acquire().await;
+        let action = shared.offset(flow.next());
+        let outcome = execute(
+            &mut client,
+            &shared.version,
+            &action,
+            &mut jitter,
+            shared.deadline,
+            &mut stats,
+        )
+        .await;
+        match outcome {
+            // As in `breach`: an accepted buy against the offer just made is
+            // taken as the fill.
+            Outcome::Accepted { .. } if flow.last_was_buy() => {
+                report.fills += 1;
+                first_fill.get_or_insert_with(Instant::now);
+            }
+            // Either order of a round can be the first one the halt reaches.
+            Outcome::Rejected(RejectReason::TradingHalted) => {
+                report.halted = true;
+                report.first_fill_to_halt = first_fill.map(|t| t.elapsed());
+                break;
+            }
+            Outcome::Accepted { .. } | Outcome::Rejected(_) | Outcome::Failed => {}
+        }
+    }
+    (stats, report)
+}
+
 // ------------------------------------------------------------ main
 
 fn single_template(args: &Args) -> SubmitOrderRequest {
@@ -385,12 +446,14 @@ fn single_template(args: &Args) -> SubmitOrderRequest {
 fn make_flow(args: &Args, index: u64) -> Flow {
     match args.scenario {
         ScenarioName::Single => Flow::Single(Single::new(index, single_template(args))),
-        ScenarioName::Random | ScenarioName::Breach => Flow::Random(RandomFlow::new(
-            args.seed,
-            index,
-            args.trader + index % args.traders,
-            args.instrument_list(),
-        )),
+        ScenarioName::Random | ScenarioName::Breach | ScenarioName::Loss => {
+            Flow::Random(RandomFlow::new(
+                args.seed,
+                index,
+                args.trader + index % args.traders,
+                args.instrument_list(),
+            ))
+        }
     }
 }
 
@@ -414,7 +477,7 @@ async fn main() -> anyhow::Result<()> {
     let (count, duration) = match (args.count, args.duration, args.scenario) {
         (None, None, ScenarioName::Single) => (Some(1), None),
         (None, None, ScenarioName::Random) => (None, Some(10)),
-        (None, None, ScenarioName::Breach) => (None, Some(30)),
+        (None, None, ScenarioName::Breach | ScenarioName::Loss) => (None, Some(30)),
         (count, duration, _) => (count, duration),
     };
     let started = Instant::now();
@@ -427,40 +490,64 @@ async fn main() -> anyhow::Result<()> {
         client_id_offset: args.client_id_offset,
     });
 
-    let (stats, breach_report) = if args.scenario == ScenarioName::Breach {
-        let instrument = args.instrument_list()[0];
-        let (stats, report) = breach(first, instrument, shared).await;
-        (stats, Some(report))
-    } else {
-        let mut handles = Vec::new();
-        let mut clients = vec![first];
-        for _ in 1..args.concurrency {
-            clients.push(connect(&args.target, connect_timeout).await?);
+    let (stats, extra) = match args.scenario {
+        ScenarioName::Breach => {
+            let instrument = args.instrument_list()[0];
+            let (stats, report) = breach(first, instrument, shared).await;
+            (stats, Some(Extra::Breach(report)))
         }
-        for (index, client) in (0_u64..).zip(clients) {
-            let flow = make_flow(&args, index);
-            let jitter = Rng::for_worker(args.seed ^ 0xA5A5_A5A5, index);
-            handles.push(tokio::spawn(worker(client, flow, jitter, shared.clone())));
+        ScenarioName::Loss => {
+            let instrument = args.instrument_list()[0];
+            let (stats, report) = loss(first, instrument, shared).await;
+            (stats, Some(Extra::Loss(report)))
         }
-        let mut total = Stats::new();
-        for handle in handles {
-            total.merge(&handle.await.context("worker panicked")?);
+        ScenarioName::Random | ScenarioName::Single => {
+            let mut handles = Vec::new();
+            let mut clients = vec![first];
+            for _ in 1..args.concurrency {
+                clients.push(connect(&args.target, connect_timeout).await?);
+            }
+            for (index, client) in (0_u64..).zip(clients) {
+                let flow = make_flow(&args, index);
+                let jitter = Rng::for_worker(args.seed ^ 0xA5A5_A5A5, index);
+                handles.push(tokio::spawn(worker(client, flow, jitter, shared.clone())));
+            }
+            let mut total = Stats::new();
+            for handle in handles {
+                total.merge(&handle.await.context("worker panicked")?);
+            }
+            (total, None)
         }
-        (total, None)
     };
     let elapsed = started.elapsed();
 
     let label = args.scenario.label();
     if args.json {
-        println!("{}", report::to_json(label, &stats, elapsed, breach_report));
+        println!("{}", report::to_json(label, &stats, elapsed, extra));
     } else {
-        print!("{}", report::to_text(label, &stats, elapsed, breach_report));
+        print!("{}", report::to_text(label, &stats, elapsed, extra));
     }
 
-    if let Some(report) = breach_report
-        && !report.blocked
-    {
-        bail!("trader 666 was never blocked within the run");
+    match extra {
+        Some(Extra::Breach(report)) if !report.blocked => {
+            bail!("trader 666 was never blocked within the run");
+        }
+        Some(Extra::Loss(report)) if !report.halted => {
+            bail!("trading was never halted within the run");
+        }
+        _ => {}
+    }
+    if let Some(reason) = args.expect_rejected {
+        let reason = RejectReason::from(reason);
+        let total = stats.operations();
+        let matching = stats.rejected_with(reason);
+        if total == 0 || matching != total {
+            bail!(
+                "{} of {total} operation(s) rejected with {} but --expect-rejected was given",
+                matching,
+                reason.as_str_name()
+            );
+        }
     }
     if args.expect_accepted {
         let bad = stats.rejected_total() + stats.resource_exhausted + stats.errors;

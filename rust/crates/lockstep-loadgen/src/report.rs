@@ -70,6 +70,14 @@ impl Stats {
         self.rejected.values().sum()
     }
 
+    /// How many operations were rejected with exactly `reason`.
+    pub(crate) fn rejected_with(&self, reason: RejectReason) -> u64 {
+        self.rejected
+            .get(reason.as_str_name())
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Operations that got a final answer or were given up on.
     pub(crate) fn operations(&self) -> u64 {
         self.accepted + self.rejected_total() + self.resource_exhausted + self.errors
@@ -105,11 +113,30 @@ pub(crate) struct BreachReport {
     pub(crate) first_fill_to_block: Option<Duration>,
 }
 
+/// Extra numbers only the `loss` scenario produces.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct LossReport {
+    /// A `TRADING_HALTED` rejection was received.
+    pub(crate) halted: bool,
+    /// Buys that were accepted (fills, see `scenario::Loss`) before the halt.
+    pub(crate) fills: u64,
+    /// Time from the first accepted buy to the first halt; `None` if either
+    /// is missing.
+    pub(crate) first_fill_to_halt: Option<Duration>,
+}
+
+/// The scenario-specific part of a report.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Extra {
+    Breach(BreachReport),
+    Loss(LossReport),
+}
+
 pub(crate) fn to_json(
     scenario: &str,
     stats: &Stats,
     elapsed: Duration,
-    breach: Option<BreachReport>,
+    extra: Option<Extra>,
 ) -> Value {
     let mut value = json!({
         "scenario": scenario,
@@ -130,10 +157,19 @@ pub(crate) fn to_json(
             "max": stats.max_us(),
         },
     });
-    if let Some(breach) = breach {
-        value["blocked"] = json!(breach.blocked);
-        value["first_fill_to_block_us"] =
-            json!(breach.first_fill_to_block.map(|d| d.as_secs_f64() * 1e6));
+    match extra {
+        Some(Extra::Breach(breach)) => {
+            value["blocked"] = json!(breach.blocked);
+            value["first_fill_to_block_us"] =
+                json!(breach.first_fill_to_block.map(|d| d.as_secs_f64() * 1e6));
+        }
+        Some(Extra::Loss(loss)) => {
+            value["halted"] = json!(loss.halted);
+            value["fills_before_halt"] = json!(loss.fills);
+            value["first_fill_to_halt_us"] =
+                json!(loss.first_fill_to_halt.map(|d| d.as_secs_f64() * 1e6));
+        }
+        None => {}
     }
     value
 }
@@ -142,7 +178,7 @@ pub(crate) fn to_text(
     scenario: &str,
     stats: &Stats,
     elapsed: Duration,
-    breach: Option<BreachReport>,
+    extra: Option<Extra>,
 ) -> String {
     let mut out = String::new();
     // Writing to a String cannot fail.
@@ -174,7 +210,25 @@ pub(crate) fn to_text(
         stats.percentile_us(0.999),
         stats.max_us(),
     );
-    if let Some(breach) = breach {
+    if let Some(Extra::Loss(loss)) = extra {
+        match (loss.halted, loss.first_fill_to_halt) {
+            (true, Some(d)) => {
+                let _ = writeln!(
+                    out,
+                    "first fill to TRADING_HALTED: {:.0} us ({} fills)",
+                    d.as_secs_f64() * 1e6,
+                    loss.fills
+                );
+            }
+            (true, None) => {
+                let _ = writeln!(out, "TRADING_HALTED received before any fill");
+            }
+            (false, _) => {
+                let _ = writeln!(out, "trading was never halted");
+            }
+        }
+    }
+    if let Some(Extra::Breach(breach)) = extra {
         match (breach.blocked, breach.first_fill_to_block) {
             (true, Some(d)) => {
                 let _ = writeln!(
@@ -259,10 +313,39 @@ mod tests {
             blocked: true,
             first_fill_to_block: Some(Duration::from_millis(2)),
         };
-        let value = to_json("breach", &sample(), Duration::from_secs(1), Some(breach));
+        let extra = Some(Extra::Breach(breach));
+        let value = to_json("breach", &sample(), Duration::from_secs(1), extra);
         assert_eq!(value["first_fill_to_block_us"], 2000.0);
+        assert!(to_text("breach", &sample(), Duration::from_secs(1), extra).contains("2000 us"));
+    }
+
+    #[test]
+    fn loss_fields_are_reported_when_asked() {
+        let loss = LossReport {
+            halted: true,
+            fills: 33,
+            first_fill_to_halt: Some(Duration::from_millis(5)),
+        };
+        let extra = Some(Extra::Loss(loss));
+        let value = to_json("loss", &sample(), Duration::from_secs(1), extra);
+        assert_eq!(value["halted"], true);
+        assert_eq!(value["fills_before_halt"], 33);
+        assert_eq!(value["first_fill_to_halt_us"], 5000.0);
+        assert!(value.get("first_fill_to_block_us").is_none());
+        let text = to_text("loss", &sample(), Duration::from_secs(1), extra);
+        assert!(text.contains("first fill to TRADING_HALTED: 5000 us (33 fills)"));
+
+        let never = Some(Extra::Loss(LossReport::default()));
         assert!(
-            to_text("breach", &sample(), Duration::from_secs(1), Some(breach)).contains("2000 us")
+            to_text("loss", &sample(), Duration::from_secs(1), never)
+                .contains("trading was never halted")
         );
+    }
+
+    #[test]
+    fn rejected_with_counts_one_reason() {
+        let stats = sample();
+        assert_eq!(stats.rejected_with(RejectReason::TraderBlocked), 2);
+        assert_eq!(stats.rejected_with(RejectReason::TradingHalted), 0);
     }
 }
