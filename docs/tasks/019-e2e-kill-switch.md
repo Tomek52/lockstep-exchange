@@ -74,3 +74,20 @@ Add the script as a step of the CI `e2e` job, after the smoke test.
 ## Dependencies
 
 - **Hard:** 002, 004, 010, 014, 016, 017.
+
+## Implementation notes
+
+What the implementation found, so the spec above is not read literally:
+
+- **Step 4 needed a sentinel change.** `total_pnl` is zero when both sides of
+  every trade are reported, so "an aggregate loss engages the kill switch" could
+  not happen. [ADR-0021](../adr/0021-sentinel-kill-switch-on-gross-loss.md)
+  moves the kill switch to the gross loss (the sum of the losers' losses).
+  Sentinel files touched: `engine.rs`, `positions.rs`, `limits.rs`, `main.rs`,
+  `session.rs` (it now logs `risk command sent`, which step 3 asserts on).
+- **Loadgen gained** a `loss` scenario and `--expect-rejected <reason>`.
+- **Traders 2-5, not 1-5, for the random run.** `breach` also blocks trader 1,
+  its liquidity provider (the provider ends up short as much as 666 is long).
+- **The example limits are not used.** `--max-abs-position 100` and
+  `--max-trader-loss 1000` would block the random traders too. The script uses
+  the limits documented in its header comment.

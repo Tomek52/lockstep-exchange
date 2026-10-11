@@ -56,7 +56,10 @@ Rules:
   `max_abs_position`, or when `trader_pnl < -max_trader_loss`. At most once
   per trader until `reset_trader`.
 - **Engage the kill switch** when `total_pnl < -kill_switch_loss` or on
-  arithmetic overflow. At most once.
+  arithmetic overflow. At most once. *(Amended by
+  [ADR-0021](../adr/0021-sentinel-kill-switch-on-gross-loss.md): the metric is
+  the gross loss, because `total_pnl` is always zero when both sides of every
+  trade are reported.)*
 - `RiskAction::…{reason}` strings say which limit and which values, for
   example `"net position 10500 > 10000 on instrument 2"`.
 

@@ -76,7 +76,7 @@ impl RiskEngine {
         self.check_position(fill.trader, fill.instrument, net_quantity, &mut actions);
 
         // TODO(perf): each fill rescans and sorts every position (traders_in,
-        // trader_pnl per holder, total_pnl); keep per-trader indexes and a
+        // trader_pnl per holder, gross_loss); keep per-trader indexes and a
         // running total if the Monitor stream makes this the hot path (task 016
         // did not measure it; task 018 benchmarks may).
         //
@@ -155,20 +155,20 @@ impl RiskEngine {
         }
     }
 
-    /// Engages the kill switch at most once, on aggregate loss or overflow.
+    /// Engages the kill switch at most once, when the gross loss of all
+    /// traders exceeds the limit (ADR-0021) or on overflow (ADR-0018).
     fn check_total(&mut self, actions: &mut Vec<RiskAction>) {
-        match self.book.total_pnl() {
-            Ok(total) if loss_exceeds(total, self.limits.kill_switch_loss) => self
-                .engage_kill_switch(
-                    format!(
-                        "total pnl {total} < -{} (kill switch)",
-                        self.limits.kill_switch_loss
-                    ),
-                    actions,
+        match self.book.gross_loss() {
+            Ok(gross) if gross > self.limits.kill_switch_loss => self.engage_kill_switch(
+                format!(
+                    "gross loss {gross} > {} (kill switch)",
+                    self.limits.kill_switch_loss
                 ),
+                actions,
+            ),
             Ok(_) => {}
             Err(_) => self.engage_kill_switch(
-                "arithmetic overflow computing total pnl".to_owned(),
+                "arithmetic overflow computing gross loss".to_owned(),
                 actions,
             ),
         }
@@ -421,8 +421,8 @@ mod tests {
         let _ = engine.on_fill(&fill(1, 2, Side::Buy, 2_000, 10_000));
         let actions = engine.on_fill(&fill(2, 2, Side::Sell, 999, 1));
         let reason = kill_switch_reason(&actions).expect("kill switch engaged");
-        assert!(reason.contains("-10010000"), "{reason}");
-        assert!(reason.contains("10000000"), "{reason}");
+        assert!(reason.contains("gross loss 10010000"), "{reason}");
+        assert!(reason.contains("> 10000000"), "{reason}");
         assert!(reason.contains("kill switch"), "{reason}");
     }
 
@@ -517,29 +517,34 @@ mod tests {
     }
 
     #[test]
-    fn overflow_computing_total_pnl_engages_kill_switch() {
-        // Traders 1 and 2 each hold u64::MAX lots bought at 1 tick in their own
-        // instrument, then each instrument trades at i64::MAX. Each trader's PnL
-        // fits in i128; their sum does not.
-        let mut engine = RiskEngine::new(unbounded_position_limits());
+    fn overflow_computing_gross_loss_engages_kill_switch() {
+        // Traders 1 and 2 each sell u64::MAX lots at 1 tick in their own
+        // instrument, then each instrument trades at i64::MAX. Each trader's
+        // loss fits in i128; their sum does not. No limit can trip first:
+        // they are all at the maximum.
+        let mut engine = RiskEngine::new(RiskLimits {
+            max_abs_position: i128::MAX,
+            max_trader_loss: Notional::MAX,
+            kill_switch_loss: Notional::MAX,
+        });
         assert!(
             engine
-                .on_fill(&fill(1, 1, Side::Buy, 1, Lots::MAX))
+                .on_fill(&fill(1, 1, Side::Sell, 1, Lots::MAX))
                 .is_empty()
         );
         assert!(
             engine
-                .on_fill(&fill(3, 1, Side::Sell, Ticks::MAX, 1))
+                .on_fill(&fill(3, 1, Side::Buy, Ticks::MAX, 1))
                 .is_empty()
         );
         assert!(
             engine
-                .on_fill(&fill(2, 2, Side::Buy, 1, Lots::MAX))
+                .on_fill(&fill(2, 2, Side::Sell, 1, Lots::MAX))
                 .is_empty()
         );
-        let actions = engine.on_fill(&fill(3, 2, Side::Sell, Ticks::MAX, 1));
+        let actions = engine.on_fill(&fill(3, 2, Side::Buy, Ticks::MAX, 1));
         let reason = kill_switch_reason(&actions).expect("kill switch engaged");
-        assert!(reason.contains("total pnl"), "{reason}");
+        assert!(reason.contains("computing gross loss"), "{reason}");
     }
 
     #[test]
@@ -555,6 +560,60 @@ mod tests {
         let actions = engine.on_fill(&fill(1, 2, Side::Buy, 100, 1));
         assert_eq!(blocked_traders(&actions), vec![1]);
         assert!(kill_switch_reason(&actions).is_some());
+    }
+
+    /// Limits where only the aggregate rule can trip: each trader's loss stays
+    /// far below `max_trader_loss`.
+    fn aggregate_only_limits() -> RiskLimits {
+        RiskLimits {
+            max_abs_position: 10_000,
+            max_trader_loss: 1_000_000,
+            kill_switch_loss: 5_000,
+        }
+    }
+
+    #[test]
+    fn many_moderate_losses_add_up_to_a_kill_switch() {
+        // ADR-0021. Ten victims each buy 100 @ 1_000 from a distinct seller
+        // (so no seller is ever long), then the mark falls to 960: each victim
+        // loses 100 * 40 = 4_000, below any single limit, but the gross loss is
+        // 40_000 > 5_000.
+        let mut engine = RiskEngine::new(aggregate_only_limits());
+        for victim in 1..=10_u64 {
+            let actions = engine.on_fill(&fill(victim, 2, Side::Buy, 1_000, 100));
+            assert!(kill_switch_reason(&actions).is_none());
+            let _ = engine.on_fill(&fill(100 + victim, 2, Side::Sell, 1_000, 100));
+        }
+        let actions = engine.on_fill(&fill(200, 2, Side::Buy, 960, 1));
+        let reason = kill_switch_reason(&actions).expect("kill switch engaged");
+        assert!(reason.contains("gross loss"), "{reason}");
+        assert!(
+            blocked_traders(&actions).is_empty(),
+            "no single limit tripped"
+        );
+    }
+
+    #[test]
+    fn profits_do_not_offset_the_gross_loss() {
+        // The sellers of the previous test gain exactly what the victims lose;
+        // the net is zero, and the kill switch still engages.
+        let mut engine = RiskEngine::new(aggregate_only_limits());
+        let _ = engine.on_fill(&fill(1, 2, Side::Buy, 1_000, 100));
+        let _ = engine.on_fill(&fill(2, 2, Side::Sell, 1_000, 100));
+        let actions = engine.on_fill(&fill(3, 2, Side::Buy, 900, 1));
+        // Victim 1 (long 100): -10_000. Seller 2 (short 100): +10_000. Net 0.
+        // Trader 3's own 1 lot, bought at the mark, has PnL 0.
+        assert!(kill_switch_reason(&actions).is_some());
+    }
+
+    #[test]
+    fn gross_loss_below_the_limit_does_not_engage_despite_offsetting_gains() {
+        // Gross loss 4_000 <= 5_000 even though a gain of the same size exists.
+        let mut engine = RiskEngine::new(aggregate_only_limits());
+        let _ = engine.on_fill(&fill(1, 2, Side::Buy, 1_000, 100));
+        let _ = engine.on_fill(&fill(2, 2, Side::Sell, 1_000, 100));
+        let actions = engine.on_fill(&fill(3, 2, Side::Buy, 960, 1));
+        assert!(kill_switch_reason(&actions).is_none());
     }
 
     #[test]

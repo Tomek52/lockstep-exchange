@@ -202,6 +202,7 @@ impl Session {
         let mut out = Vec::new();
         for action in state.engine.on_fill(&fill) {
             let command_id = state.next_id();
+            info!(command_id, ?action, "risk command sent");
             out.push(encode_command(command_id, &action));
             state.pending.insert(
                 command_id,
@@ -222,6 +223,7 @@ impl Session {
                 command_id,
                 latency_us =
                     u64::try_from(pending.sent_at.elapsed().as_micros()).unwrap_or(u64::MAX),
+                action = ?pending.action,
                 "risk command applied by exchange"
             );
         } else {

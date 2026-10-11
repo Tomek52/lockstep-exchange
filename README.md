@@ -91,6 +91,7 @@ cmake --workflow --preset tsan
 
 # End-to-end: risk-sentinel + exchange-core + loadgen as separate processes
 scripts/e2e-smoke.sh
+scripts/e2e-kill-switch.sh              # the risk loop: block, kill switch, replay
 
 # Or the whole stack in containers
 docker compose -f deploy/docker-compose.yml up --build -d --wait
@@ -113,6 +114,56 @@ cannot safely repair stops startup naming the file instead. To inspect a
 journal, run `build/debug/exchange-core/main/journal-dump <dir>/shard-0.jnl`,
 or `build/debug/exchange-core/main/lockstep-replay --journal-dir=<dir>
 --shards=N --instruments=...` for a per-shard digest of the whole directory.
+
+## See the risk loop in action
+
+`scripts/e2e-kill-switch.sh` starts risk-sentinel (tight limits) and
+exchange-core (with a journal), then drives them with loadgen:
+
+1. trader 666 buys until it breaches the position limit and is **blocked**
+   (`TRADER_BLOCKED`), while four other traders keep getting accepts;
+2. a falling market of many moderate losses, none near the per-trader limit,
+   pushes the **gross loss** over the kill-switch limit
+   ([ADR-0021](docs/adr/0021-sentinel-kill-switch-on-gross-loss.md)); from then
+   on every order from every trader on every instrument gets `TRADING_HALTED`;
+3. after stopping exchange-core, `lockstep-replay` over the journals gives the
+   same digests as the live run, so every rejection is reproduced exactly, and
+   `journal-dump` shows the `BlockTrader` and `KillSwitch` commands on both
+   shards.
+
+```bash
+cmake --build --preset debug --target exchange-core lockstep-replay journal-dump
+(cd rust && cargo build)
+scripts/e2e-kill-switch.sh
+```
+
+An excerpt of its output (WSL2 laptop, debug build; the numbers vary):
+
+```text
+==> sentinel sent BlockTrader for 666 and the exchange applied it
+    ... risk command sent command_id=1 action=BlockTrader { trader: 666, reason: "net position 2100 > 2000 on instrument 2" }
+    ... risk command applied by exchange command_id=1 latency_us=3208 action=BlockTrader { trader: 666, ... }
+==> sentinel engaged the kill switch and the exchange applied it on every shard
+    ... risk command sent command_id=3 action=KillSwitch { engaged: true, reason: "gross loss 106256 > 100000 (kill switch)" }
+    ... risk command applied by exchange command_id=3 latency_us=8808 action=KillSwitch { engaged: true, ... }
+==> lockstep-replay digest vs --print-digest-on-exit
+    exchange-core:   shard 0: 284 commands, 744 events, digest=0xc4d67bc142518e2b
+    lockstep-replay: shard 0: 284 commands, 744 events, digest=0xc4d67bc142518e2b
+==> scenario timeline
+    time to block (first fill -> TRADER_BLOCKED, breach):  169701 us
+    time to halt  (first fill -> TRADING_HALTED, loss):    283282 us (33 fills)
+    rejected orders by reason, all loadgen runs:
+      REJECT_REASON_TRADER_BLOCKED     1
+      REJECT_REASON_TRADING_HALTED     25
+      REJECT_REASON_UNKNOWN_ORDER      18
+E2E KILL-SWITCH PASSED
+```
+
+The two "time to" figures are measured by loadgen from the first accepted fill
+of the scenario to the first rejection, so they include the scenario's own
+rounds of orders (21 for the block, 33 for the halt), not only the latency of
+the sentinel loop. The sentinel's own send-to-applied latency is the
+`latency_us` in its log (a few milliseconds here).
 
 ## Repository layout
 
@@ -151,8 +202,9 @@ ROADMAP.md                milestones → task specs
 | Deterministic replay test (live vs replay, in memory and on disk, crash recovery, restart) | ✅ ([task 010](docs/tasks/010-deterministic-replay.md)) |
 | Market data stream: `MarketDataService.Subscribe` with instrument and kind filters, slow consumers disconnected with `RESOURCE_EXHAUSTED` | ✅ ([task 013](docs/tasks/013-grpc-market-data.md)) |
 | risk-sentinel position/limit engine and Monitor session | ✅ pure positions, PnL and limits ([task 015](docs/tasks/015-sentinel-positions-pnl.md)); execution reports decoded, deduplicated across reconnects, risk commands with unique ids, heartbeats and idle timeout, limits as CLI flags ([task 016](docs/tasks/016-sentinel-monitor-service.md)) |
+| End-to-end risk loop across processes: breach → block → kill switch on gross loss → `TRADING_HALTED` for everyone → replay digests equal, in CI | ✅ ([task 019](docs/tasks/019-e2e-kill-switch.md), [ADR-0021](docs/adr/0021-sentinel-kill-switch-on-gross-loss.md)) |
 | Benchmarks: matching, queues and in-process engine round trip with p50/p99/p99.9, `scripts/run-benchmarks.sh` | ✅ ([task 018](docs/tasks/018-benchmarks.md), results below) |
-| Load generator: `random` / `breach` / `single` scenarios, `--concurrency`, `--rate`, seeded order flow, text and `--json` reports with p50-p99.9, back-pressure retries | ✅ ([task 017](docs/tasks/017-loadgen.md)) |
+| Load generator: `random` / `breach` / `loss` / `single` scenarios, `--concurrency`, `--rate`, seeded order flow, text and `--json` reports with p50-p99.9, back-pressure retries | ✅ ([task 017](docs/tasks/017-loadgen.md)) |
 
 Verified locally on the skeleton (WSL2, Ubuntu 24.04):
 - all C++ tests on debug, clang-debug, asan-ubsan and tsan;

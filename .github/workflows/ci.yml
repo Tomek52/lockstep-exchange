@@ -155,6 +155,8 @@ jobs:
         run: scripts/e2e-smoke.sh
       - name: Smoke test (from config file)
         run: scripts/e2e-smoke.sh --config config/exchange.json
+      - name: Risk loop (block, kill switch, replay)
+        run: scripts/e2e-kill-switch.sh
 
   docker:
     name: Docker images

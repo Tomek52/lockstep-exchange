@@ -306,6 +306,81 @@ impl Breach {
     }
 }
 
+// ---------------------------------------------------------------- loss
+
+/// First trade price of the `loss` ladder.
+const LOSS_START_PRICE: i64 = 1_000;
+/// Each round trades this many ticks lower than the previous one.
+const LOSS_STEP: i64 = 2;
+/// The ladder stops falling here, so a run that is never halted cannot walk
+/// the price to zero or below.
+const LOSS_PRICE_FLOOR: i64 = 100;
+const LOSS_QUANTITY: u64 = 100;
+/// Every round uses a fresh seller and a fresh buyer (`BASE + round`), so no
+/// single trader accumulates a position or a loss: only the *aggregate* grows.
+const LOSS_SELLER_BASE: u64 = 10_000;
+const LOSS_BUYER_BASE: u64 = 20_000;
+
+/// A falling market made of many moderate losses. Round `r` trades
+/// `LOSS_QUANTITY` lots at `LOSS_START_PRICE - (r - 1) * LOSS_STEP`: a fresh
+/// seller offers, a fresh buyer takes it. Every earlier buyer is now long at
+/// a higher price and holds an unrealised loss; each seller's matching gain
+/// is real but, for the sentinel's gross-loss kill switch (ADR-0021), it
+/// does not offset them. After `r` rounds the gross loss is
+/// `LOSS_QUANTITY * LOSS_STEP * r * (r - 1) / 2` and no trader's own loss
+/// exceeds `LOSS_QUANTITY * LOSS_STEP * (r - 1)`.
+#[derive(Debug)]
+pub(crate) struct Loss {
+    instrument_id: u32,
+    round: u64,
+    next_is_buy: bool,
+}
+
+impl Loss {
+    pub(crate) fn new(instrument_id: u32) -> Self {
+        Self {
+            instrument_id,
+            round: 0,
+            next_is_buy: false,
+        }
+    }
+
+    /// True when the action returned by the last call is the buy that fills.
+    pub(crate) fn last_was_buy(&self) -> bool {
+        !self.next_is_buy
+    }
+
+    /// The price of round `round` (1-based).
+    fn price(round: u64) -> i64 {
+        let drop = i64::try_from(round - 1)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(LOSS_STEP);
+        LOSS_START_PRICE.saturating_sub(drop).max(LOSS_PRICE_FLOOR)
+    }
+
+    pub(crate) fn next(&mut self) -> Action {
+        let buy = self.next_is_buy;
+        if !buy {
+            self.round += 1;
+        }
+        self.next_is_buy = !buy;
+        Action::Submit(SubmitOrderRequest {
+            trader_id: if buy {
+                LOSS_BUYER_BASE
+            } else {
+                LOSS_SELLER_BASE
+            } + self.round,
+            client_order_id: 1,
+            instrument_id: self.instrument_id,
+            side: if buy { Side::Buy } else { Side::Sell }.into(),
+            r#type: OrderType::Limit.into(),
+            time_in_force: TimeInForce::Gtc.into(),
+            price_ticks: Self::price(self.round),
+            quantity: LOSS_QUANTITY,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -465,5 +540,66 @@ mod tests {
         assert_eq!(sell.price_ticks, buy.price_ticks);
         assert_eq!(sell.quantity, buy.quantity);
         assert_eq!(buy.instrument_id, 3);
+    }
+
+    fn submit(action: &Action) -> SubmitOrderRequest {
+        match action {
+            Action::Submit(request) => *request,
+            Action::Cancel(_) => panic!("loss only submits"),
+        }
+    }
+
+    #[test]
+    fn loss_rounds_pair_a_fresh_seller_with_a_fresh_buyer_at_a_falling_price() {
+        let mut loss = Loss::new(1);
+        let mut previous_price = i64::MAX;
+        let mut traders = HashSet::new();
+        for round in 1..=20_u64 {
+            let sell = submit(&loss.next());
+            assert!(!loss.last_was_buy());
+            let buy = submit(&loss.next());
+            assert!(loss.last_was_buy());
+            assert_eq!(sell.side, Side::Sell as i32);
+            assert_eq!(buy.side, Side::Buy as i32);
+            assert_eq!(sell.price_ticks, buy.price_ticks);
+            assert_eq!(sell.quantity, buy.quantity);
+            assert_eq!(sell.instrument_id, 1);
+            assert_eq!(sell.trader_id, LOSS_SELLER_BASE + round);
+            assert_eq!(buy.trader_id, LOSS_BUYER_BASE + round);
+            assert!(sell.price_ticks < previous_price, "round {round}");
+            previous_price = sell.price_ticks;
+            assert!(traders.insert(sell.trader_id) && traders.insert(buy.trader_id));
+        }
+        assert_eq!(previous_price, LOSS_START_PRICE - 19 * LOSS_STEP);
+    }
+
+    #[test]
+    fn loss_price_stops_at_the_floor() {
+        let mut loss = Loss::new(1);
+        let mut last = 0;
+        for _ in 0..10_000 {
+            last = submit(&loss.next()).price_ticks;
+        }
+        assert_eq!(last, LOSS_PRICE_FLOOR);
+    }
+
+    #[test]
+    fn loss_gross_loss_formula_matches_a_direct_computation() {
+        // Documented on `Loss`: after r rounds the gross loss is
+        // Q * step * r * (r - 1) / 2, and no buyer lost more than
+        // Q * step * (r - 1).
+        let rounds: i64 = 12;
+        let last = Loss::price(12);
+        let quantity = i128::from(LOSS_QUANTITY);
+        let (mut gross, mut worst) = (0_i128, 0_i128);
+        for round in 1..=rounds {
+            let loss = quantity * i128::from(Loss::price(u64::try_from(round).unwrap()) - last);
+            gross += loss;
+            worst = worst.max(loss);
+        }
+        let r = i128::from(rounds);
+        let step = i128::from(LOSS_STEP);
+        assert_eq!(gross, quantity * step * r * (r - 1) / 2);
+        assert_eq!(worst, quantity * step * (r - 1));
     }
 }

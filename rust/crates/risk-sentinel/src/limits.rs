@@ -9,7 +9,9 @@ pub struct RiskLimits {
     pub max_abs_position: i128,
     /// Loss (tick-lots, positive number) per trader before blocking.
     pub max_trader_loss: Notional,
-    /// Aggregate loss across all traders that engages the kill switch.
+    /// Gross loss across all traders (the sum of the losses of the traders
+    /// with a negative PnL, profits not netted; ADR-0021) that engages the
+    /// kill switch.
     pub kill_switch_loss: Notional,
 }
 

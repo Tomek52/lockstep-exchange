@@ -58,7 +58,7 @@ Numbers and a demo.
 
 - [x] [017 Load generator: concurrency, rate, scenarios](docs/tasks/017-loadgen.md)
 - [x] [018 Benchmarks with latency percentiles](docs/tasks/018-benchmarks.md)
-- [ ] [019 End-to-end kill-switch scenario](docs/tasks/019-e2e-kill-switch.md)
+- [x] [019 End-to-end kill-switch scenario](docs/tasks/019-e2e-kill-switch.md)
 
 ## Recommended starting order
 
