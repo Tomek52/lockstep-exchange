@@ -159,6 +159,30 @@ impl PositionBook {
         Ok(total)
     }
 
+    /// Gross loss (ADR-0021): the sum of `-pnl` over the traders whose PnL is
+    /// negative. Profits do not offset it, so unlike [`total_pnl`](Self::total_pnl)
+    /// (always zero when both sides of every trade are reported) it grows when
+    /// anyone loses.
+    #[must_use = "an Overflow result must engage the kill switch (ADR-0018)"]
+    pub fn gross_loss(&self) -> Result<Notional, Overflow> {
+        let mut traders: Vec<u64> = self.positions.keys().map(|&(trader, _)| trader).collect();
+        // Sorted and deduplicated so the fold order, and therefore any Overflow
+        // decision near the i128 boundary, does not depend on HashMap iteration
+        // order (ADR-0004 determinism).
+        traders.sort_unstable();
+        traders.dedup();
+        let mut gross: Notional = 0;
+        for trader in traders {
+            let pnl = self.trader_pnl(trader)?;
+            if pnl < 0 {
+                // `pnl` can be i128::MIN, whose magnitude does not fit.
+                let loss = pnl.checked_neg().ok_or(Overflow)?;
+                gross = gross.checked_add(loss).ok_or(Overflow)?;
+            }
+        }
+        Ok(gross)
+    }
+
     /// Aggregate PnL across every trader and instrument.
     #[must_use = "an Overflow result must engage the kill switch (ADR-0018)"]
     pub fn total_pnl(&self) -> Result<Notional, Overflow> {
@@ -276,6 +300,58 @@ mod tests {
         // Both marked at 100: trader 1 flat-value long, trader 2 flat-value short,
         // their PnLs cancel to zero.
         assert_eq!(book.total_pnl().unwrap(), 0);
+    }
+
+    #[test]
+    fn gross_loss_sums_only_the_losers() {
+        // ADR-0021. Trader 1 long 10 @ 100, trader 2 short 10 @ 100, then the
+        // mark falls to 90: trader 1 loses 100, trader 2 gains 100.
+        let mut book = PositionBook::default();
+        book.apply(&fill(1, 7, Side::Buy, 100, 10)).unwrap();
+        book.apply(&fill(2, 7, Side::Sell, 100, 10)).unwrap();
+        book.apply(&fill(3, 7, Side::Buy, 90, 1)).unwrap();
+        assert_eq!(book.trader_pnl(1), Ok(-100));
+        assert_eq!(book.trader_pnl(2), Ok(100));
+        assert_eq!(book.total_pnl(), Ok(0));
+        assert_eq!(book.gross_loss(), Ok(100));
+    }
+
+    #[test]
+    fn gross_loss_is_zero_for_an_empty_book_and_for_gains_only() {
+        let mut book = PositionBook::default();
+        assert_eq!(book.gross_loss(), Ok(0));
+        book.apply(&fill(1, 7, Side::Buy, 100, 10)).unwrap();
+        book.apply(&fill(1, 7, Side::Sell, 110, 10)).unwrap();
+        assert_eq!(book.gross_loss(), Ok(0));
+    }
+
+    #[test]
+    fn gross_loss_counts_each_trader_once_across_instruments() {
+        // Trader 1 loses 100 on instrument 7 and 50 on instrument 8, and gains
+        // 20 on instrument 9: the trader's PnL is -130, counted once.
+        let mut book = PositionBook::default();
+        book.apply(&fill(1, 7, Side::Buy, 100, 10)).unwrap();
+        book.apply(&fill(2, 7, Side::Sell, 90, 1)).unwrap();
+        book.apply(&fill(1, 8, Side::Buy, 100, 5)).unwrap();
+        book.apply(&fill(2, 8, Side::Sell, 90, 1)).unwrap();
+        book.apply(&fill(1, 9, Side::Buy, 100, 2)).unwrap();
+        book.apply(&fill(2, 9, Side::Sell, 110, 1)).unwrap();
+        assert_eq!(book.trader_pnl(1), Ok(-130));
+        assert_eq!(book.gross_loss(), Ok(130));
+    }
+
+    #[test]
+    fn gross_loss_overflow_is_reported() {
+        // Two traders each lose almost 2^127; their losses cannot be summed.
+        let mut book = PositionBook::default();
+        for (trader, instrument) in [(1, 1), (2, 2)] {
+            book.apply(&fill(trader, instrument, Side::Sell, 1, Lots::MAX))
+                .unwrap();
+            book.apply(&fill(9, instrument, Side::Buy, Ticks::MAX, 1))
+                .unwrap();
+        }
+        assert!(book.trader_pnl(1).unwrap() < 0);
+        assert_eq!(book.gross_loss(), Err(Overflow));
     }
 
     #[test]

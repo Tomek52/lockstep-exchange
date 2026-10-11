@@ -27,8 +27,9 @@ struct Args {
     /// Loss (tick-lots) per trader before the trader is blocked.
     #[arg(long, default_value_t = RiskLimits::default().max_trader_loss, allow_negative_numbers = true)]
     max_trader_loss: i128,
-    /// Aggregate loss (tick-lots) across all traders that engages the kill
-    /// switch.
+    /// Gross loss (tick-lots) that engages the kill switch: the sum of the
+    /// losses of all traders with a negative PnL, profits not netted
+    /// (ADR-0021).
     #[arg(long, default_value_t = RiskLimits::default().kill_switch_loss, allow_negative_numbers = true)]
     kill_switch_loss: i128,
 }

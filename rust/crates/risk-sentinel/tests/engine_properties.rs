@@ -126,6 +126,23 @@ proptest! {
         prop_assert_eq!(book.total_pnl().expect("no overflow"), expected_total);
     }
 
+    /// ADR-0021: the gross loss is the sum of the losers' losses, computed
+    /// from the independent recomputation, and never negative.
+    #[test]
+    fn gross_loss_matches_independent_recomputation(fills in prop::collection::vec(small_fill(), 0..32)) {
+        let mut book = PositionBook::default();
+        for fill in &fills {
+            book.apply(fill).expect("small fills never overflow");
+        }
+        let expected: Notional = (0..4)
+            .map(|trader| recompute_trader_pnl(&fills, trader))
+            .filter(|pnl| *pnl < 0)
+            .map(|pnl| -pnl)
+            .sum();
+        prop_assert!(expected >= 0);
+        prop_assert_eq!(book.gross_loss().expect("no overflow"), expected);
+    }
+
     /// (ii) Net quantity is additive across fills.
     #[test]
     fn positions_are_additive(fills in prop::collection::vec(small_fill(), 0..32)) {
