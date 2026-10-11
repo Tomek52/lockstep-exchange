@@ -53,6 +53,8 @@ Make risk-sentinel's `Monitor` stream do its job:
   received.
 - **Duplicate detection:** a bounded set (for example the last 1 000 000
   keys, FIFO eviction) keyed by `(shard_id, shard_sequence, is_maker)`.
+  *(Amended by [ADR-0022](../adr/0022-execution-report-trade-index.md): the key
+  also has `trade_index`.)*
 - **Heartbeats:** send one downstream every 1 s. Close the session if no
   upstream message arrives within 5 s.
 - **CLI flags** in `main.rs` for the three limits (defaults from
