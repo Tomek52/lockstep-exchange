@@ -15,5 +15,5 @@ fi
 cmake --build --preset clang-debug --target lockstep_proto >/dev/null
 
 run-clang-tidy-19 -p "${build_dir}" -quiet -j "$(nproc)" \
-  "${repo_root}/exchange-core/(domain|app|adapters|main|concurrency)/.*\.cpp$"
+  "${repo_root}/exchange-core/(domain|app|adapters|main|concurrency|bench)/.*\.cpp$"
 echo "clang-tidy passed"
