@@ -59,6 +59,7 @@ Numbers and a demo.
 - [x] [017 Load generator: concurrency, rate, scenarios](docs/tasks/017-loadgen.md)
 - [x] [018 Benchmarks with latency percentiles](docs/tasks/018-benchmarks.md)
 - [x] [019 End-to-end kill-switch scenario](docs/tasks/019-e2e-kill-switch.md)
+- [ ] [021 Execution reports of one command must not collide in the sentinel's dedup](docs/tasks/021-execution-report-trade-index.md)
 
 ## Recommended starting order
 

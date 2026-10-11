@@ -127,6 +127,7 @@ nav:
       - tasks/018-benchmarks.md
       - tasks/019-e2e-kill-switch.md
       - tasks/020-stabilize-idle-park-test.md
+      - tasks/021-execution-report-trade-index.md
   - Workflow:
       - ai-workflow.md
       - agent-rules.md

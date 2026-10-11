@@ -34,6 +34,7 @@ definition of done in CLAUDE.md holds.
 | [018](018-benchmarks.md) | Benchmarks with latency percentiles | bench | 002, 005, 006 | C |
 | [019](019-e2e-kill-switch.md) | End-to-end kill-switch scenario | scripts, CI | 002, 004, 010, 014, 016, 017 | D |
 | [020](020-stabilize-idle-park-test.md) | Stabilise the idle-parking test under CPU load | tests/app | – | A |
+| [021](021-execution-report-trade-index.md) | Execution reports of one command must not collide in the sentinel's dedup | proto, adapters/codec, risk_client, rust/risk-sentinel | 014, 016 | C |
 
 ## Parallel waves
 
@@ -62,6 +63,7 @@ flowchart LR
         t003[003 modify]
         t010[010 replay]
         t018[018 benchmarks]
+        t021[021 report trade index]
     end
     subgraph D["Wave D"]
         t019[019 e2e kill switch]
@@ -76,6 +78,7 @@ flowchart LR
     t005 --> t018
     t006 --> t018
     t002 & t004 & t010 & t014 & t016 & t017 --> t019
+    t014 & t016 --> t021
 ```
 
 ## File ownership (to minimise merge conflicts)
@@ -101,6 +104,7 @@ files listed below, where the expected edit is a one-line addition.
 | `rust/crates/lockstep-loadgen/**` | 017 |
 | `exchange-core/bench/**`, `scripts/run-benchmarks.sh` | 018 |
 | `tests/app/engine_pipeline_test.cpp` (idle-parking test), `tests/app/test_support.hpp` (wait helper) | 020 |
+| `ExecutionReport.trade_index` (`proto/lockstep/v1/risk.proto`), report dedup key in `rust/crates/risk-sentinel/src/session.rs` | 021 |
 
 **Shared, one-line edits** (rebase and resolve trivially):
 - `app/include/lockstep/app/queues.hpp`: 005, 006.
