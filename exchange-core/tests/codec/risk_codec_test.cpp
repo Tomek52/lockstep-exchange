@@ -25,7 +25,7 @@ domain::Trade sample_trade() {
 
 TEST(RiskCodec, TradeYieldsTakerThenMakerReports) {
     const auto trade = sample_trade();
-    const auto reports = encode_execution_reports(trade_event(trade), trade);
+    const auto reports = encode_execution_reports(trade_event(trade), trade, 0);
 
     const auto& taker = reports[0];
     EXPECT_FALSE(taker.is_maker());
@@ -43,7 +43,7 @@ TEST(RiskCodec, TradeYieldsTakerThenMakerReports) {
 TEST(RiskCodec, SellAggressorFlipsBothSides) {
     auto trade = sample_trade();
     trade.aggressor_side = domain::Side::Sell;
-    const auto reports = encode_execution_reports(trade_event(trade), trade);
+    const auto reports = encode_execution_reports(trade_event(trade), trade, 0);
 
     EXPECT_EQ(reports[0].side(), v1::SIDE_SELL);  // taker
     EXPECT_EQ(reports[1].side(), v1::SIDE_BUY);   // maker
@@ -51,7 +51,7 @@ TEST(RiskCodec, SellAggressorFlipsBothSides) {
 
 TEST(RiskCodec, BothReportsCarryProvenanceAndFillDetails) {
     const auto trade = sample_trade();
-    const auto reports = encode_execution_reports(trade_event(trade), trade);
+    const auto reports = encode_execution_reports(trade_event(trade), trade, 0);
 
     for (const auto& report : reports) {
         EXPECT_EQ(report.shard_id(), 2U);
@@ -61,6 +61,17 @@ TEST(RiskCodec, BothReportsCarryProvenanceAndFillDetails) {
         EXPECT_EQ(report.price_ticks(), 101);
         EXPECT_EQ(report.quantity(), 5U);
     }
+}
+
+TEST(RiskCodec, BothReportsCarryTheTradeIndex) {
+    const auto trade = sample_trade();
+    const auto reports = encode_execution_reports(trade_event(trade), trade, 3);
+
+    EXPECT_EQ(reports[0].trade_index(), 3U);
+    EXPECT_EQ(reports[1].trade_index(), 3U);
+    // Nothing else depends on it.
+    EXPECT_EQ(reports[0].shard_sequence(), 42U);
+    EXPECT_EQ(reports[1].quantity(), 5U);
 }
 
 }  // namespace

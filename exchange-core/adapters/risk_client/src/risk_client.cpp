@@ -377,10 +377,26 @@ void RiskClient::enqueue_upstream(v1::MonitorRequest&& message) {
     wake_.notify_all();
 }
 
+std::uint32_t RiskClient::next_trade_index(std::size_t shard, std::uint64_t sequence) {
+    if (shard >= trade_counters_.size()) {
+        trade_counters_.resize(shard + 1);
+    }
+    TradeCounter& counter = trade_counters_[shard];
+    // Sequences are positive and strictly increasing per shard, so the initial
+    // 0 never matches and a new command always restarts the count.
+    if (counter.sequence != sequence) {
+        counter.sequence = sequence;
+        counter.next_index = 0;
+    }
+    return counter.next_index++;
+}
+
 void RiskClient::on_events(std::span<const app::PublishedEvent> events) {
     for (const auto& event : events) {
         if (const auto* trade = std::get_if<domain::Trade>(&event.event)) {
-            for (auto& report : codec::encode_execution_reports(event, *trade)) {
+            const std::uint32_t trade_index =
+                next_trade_index(event.shard.value(), event.sequence.value());
+            for (auto& report : codec::encode_execution_reports(event, *trade, trade_index)) {
                 v1::MonitorRequest message;
                 *message.mutable_execution() = std::move(report);
                 enqueue_upstream(std::move(message));

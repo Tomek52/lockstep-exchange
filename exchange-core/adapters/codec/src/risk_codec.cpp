@@ -24,6 +24,7 @@ void fill_report(const app::PublishedEvent& event,
                  domain::OrderId order,
                  domain::Side side,
                  bool is_maker,
+                 std::uint32_t trade_index,
                  v1::ExecutionReport& report) {
     report.set_shard_id(event.shard.value());
     report.set_shard_sequence(event.sequence.value());
@@ -35,19 +36,21 @@ void fill_report(const app::PublishedEvent& event,
     report.set_price_ticks(trade.price.value());
     report.set_quantity(trade.quantity.value());
     report.set_is_maker(is_maker);
+    report.set_trade_index(trade_index);
 }
 
 }  // namespace
 
 std::array<v1::ExecutionReport, 2> encode_execution_reports(const app::PublishedEvent& event,
-                                                            const domain::Trade& trade) {
+                                                            const domain::Trade& trade,
+                                                            std::uint32_t trade_index) {
     std::array<v1::ExecutionReport, 2> reports;
     // Taker: the aggressor, by definition on `aggressor_side`, took liquidity.
     fill_report(event, trade, trade.taker_trader, trade.taker_order, trade.aggressor_side,
-                /*is_maker=*/false, reports[0]);
+                /*is_maker=*/false, trade_index, reports[0]);
     // Maker: the resting order on the opposite side provided liquidity.
     fill_report(event, trade, trade.maker_trader, trade.maker_order,
-                domain::opposite(trade.aggressor_side), /*is_maker=*/true, reports[1]);
+                domain::opposite(trade.aggressor_side), /*is_maker=*/true, trade_index, reports[1]);
     return reports;
 }
 

@@ -68,6 +68,11 @@ message ExecutionReport {
   uint64 quantity = 9;
   // True if this order was resting on the book (provided liquidity).
   bool is_maker = 10;
+  // Zero-based position of this trade among the trades produced by the command
+  // with this shard_sequence (a sweeping order trades more than once, and all
+  // its events share the sequence). (shard_id, shard_sequence, trade_index,
+  // is_maker) identifies a report. A sender that does not know it leaves 0.
+  uint32 trade_index = 11;
 }
 
 // A command from the sentinel.

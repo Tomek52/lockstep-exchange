@@ -25,12 +25,15 @@ use tracing::{debug, info, warn};
 use crate::engine::{Fill, RiskAction, RiskEngine};
 use crate::positions::Side;
 
-/// Reports remembered for duplicate detection (FIFO eviction).
+/// Report keys remembered for duplicate detection (FIFO eviction). It counts
+/// keys, not commands: every trade of a command adds two.
 pub const DEFAULT_DEDUP_CAPACITY: usize = 1_000_000;
 
-/// `(shard_id, shard_sequence, is_maker)`: one trade yields a maker and a
-/// taker report with the same shard id and sequence (ADR-0013).
-type ReportKey = (u32, u64, bool);
+/// `(shard_id, shard_sequence, trade_index, is_maker)` (ADR-0022): every event
+/// of a command shares its sequence and a sweeping order trades several
+/// times, so the trade index tells the trades of one command apart; one trade
+/// yields a maker and a taker report.
+type ReportKey = (u32, u64, u32, bool);
 
 /// A bounded set of recently seen keys. Once full, the oldest key is
 /// forgotten, so a duplicate that arrives after `capacity` newer reports is
@@ -185,14 +188,20 @@ impl Session {
         let Some(fill) = decode_fill(report) else {
             return Vec::new();
         };
-        let key = (report.shard_id, report.shard_sequence, report.is_maker);
+        let key = (
+            report.shard_id,
+            report.shard_sequence,
+            report.trade_index,
+            report.is_maker,
+        );
 
         let mut state = self.state.lock().await;
         if !state.dedup.first_seen(key) {
             debug!(
                 shard_id = key.0,
                 shard_sequence = key.1,
-                is_maker = key.2,
+                trade_index = key.2,
+                is_maker = key.3,
                 "duplicate execution report ignored"
             );
             return Vec::new();
@@ -310,6 +319,7 @@ mod tests {
             price_ticks: 100,
             quantity,
             is_maker: false,
+            trade_index: 0,
         }
     }
 
@@ -370,6 +380,66 @@ mod tests {
         assert!(first.is_empty());
         assert!(duplicate.is_empty());
         assert!(next.is_empty(), "6 + 4 = 10 is within the limit");
+    }
+
+    fn trade(trader: u64, sequence: u64, trade_index: u32, quantity: u64) -> ExecutionReport {
+        ExecutionReport {
+            trade_index,
+            ..report(trader, sequence, quantity)
+        }
+    }
+
+    #[tokio::test]
+    async fn trades_of_one_command_are_all_applied() {
+        // Task 021: a taker that sweeps two makers yields two trades with
+        // one shard_sequence. 6 + 6 = 12 > 10 only if both count.
+        let mut session = session_with(limits());
+
+        let first = session.handle(execution(trade(7, 1, 0, 6))).await;
+        let second = session.handle(execution(trade(7, 1, 1, 6))).await;
+
+        assert!(first.is_empty());
+        assert_eq!(second.len(), 1, "the second trade of the command counts");
+    }
+
+    #[tokio::test]
+    async fn a_replayed_sweep_counts_once() {
+        let mut session = session_with(limits());
+        for _ in 0..2 {
+            // 4 + 4 = 8 within the limit; counted twice it would be 16.
+            assert!(
+                session
+                    .handle(execution(trade(7, 1, 0, 4)))
+                    .await
+                    .is_empty()
+            );
+            assert!(
+                session
+                    .handle(execution(trade(7, 1, 1, 4)))
+                    .await
+                    .is_empty()
+            );
+        }
+
+        // 8 + 3 = 11 > 10 proves the replay was not added.
+        let out = session.handle(execution(trade(7, 1, 2, 3))).await;
+        assert_eq!(out.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn maker_and_taker_of_a_later_trade_are_both_applied() {
+        let mut session = session_with(limits());
+        let taker = trade(7, 1, 1, 6);
+        let maker = ExecutionReport {
+            is_maker: true,
+            trader_id: 8,
+            ..taker
+        };
+
+        assert!(session.handle(execution(taker)).await.is_empty());
+        assert!(session.handle(execution(maker)).await.is_empty());
+        let out = session.handle(execution(report(8, 2, 5))).await;
+        assert_eq!(out.len(), 1, "trader 8 holds 6 from the maker report");
     }
 
     #[tokio::test]
@@ -433,12 +503,27 @@ mod tests {
     async fn dedup_window_forgets_the_oldest_key_when_full() {
         let mut window = DedupWindow::new(2);
 
-        assert!(window.first_seen((0, 1, false)));
-        assert!(window.first_seen((0, 2, false)));
-        assert!(!window.first_seen((0, 1, false)));
-        assert!(window.first_seen((0, 3, false)), "evicts key 1");
-        assert!(window.first_seen((0, 1, false)), "key 1 was forgotten");
-        assert!(!window.first_seen((0, 3, false)));
+        assert!(window.first_seen((0, 1, 0, false)));
+        assert!(window.first_seen((0, 2, 0, false)));
+        assert!(!window.first_seen((0, 1, 0, false)));
+        assert!(window.first_seen((0, 3, 0, false)), "evicts key 1");
+        assert!(window.first_seen((0, 1, 0, false)), "key 1 was forgotten");
+        assert!(!window.first_seen((0, 3, 0, false)));
+    }
+
+    #[tokio::test]
+    async fn dedup_window_capacity_counts_keys_not_commands() {
+        // Task 021: one command can contribute many keys (two per trade).
+        let mut window = DedupWindow::new(2);
+
+        assert!(window.first_seen((0, 1, 0, false)));
+        assert!(window.first_seen((0, 1, 1, false)));
+        assert!(!window.first_seen((0, 1, 0, false)));
+        assert!(
+            window.first_seen((0, 1, 2, false)),
+            "evicts (0, 1, 0, false)"
+        );
+        assert!(window.first_seen((0, 1, 0, false)), "it was forgotten");
     }
 
     #[tokio::test]

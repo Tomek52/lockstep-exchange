@@ -10,9 +10,11 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <span>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include <grpcpp/grpcpp.h>
@@ -275,7 +277,7 @@ RiskClientConfig fast_config(int port, std::uint32_t shard_count) {
                             .max_queued_messages = 100'000};
 }
 
-app::PublishedEvent trade_event() {
+app::PublishedEvent trade_event(std::uint32_t shard = 0, std::uint64_t sequence = 1) {
     const domain::Trade trade{.instrument = domain::InstrumentId{7},
                               .price = domain::Price{101},
                               .quantity = domain::Quantity{5},
@@ -284,10 +286,19 @@ app::PublishedEvent trade_event() {
                               .maker_trader = domain::TraderId{100},
                               .taker_order = domain::OrderId{20},
                               .taker_trader = domain::TraderId{200}};
-    return app::PublishedEvent{.shard = domain::ShardId{0},
-                               .sequence = domain::SequenceNumber{1},
+    return app::PublishedEvent{.shard = domain::ShardId{shard},
+                               .sequence = domain::SequenceNumber{sequence},
                                .timestamp = domain::Timestamp{123},
                                .event = trade};
+}
+
+/// A non-trade event of the command with `sequence` (every event of a command
+/// shares it).
+app::PublishedEvent accepted_event(std::uint32_t shard, std::uint64_t sequence) {
+    return app::PublishedEvent{.shard = domain::ShardId{shard},
+                               .sequence = domain::SequenceNumber{sequence},
+                               .timestamp = domain::Timestamp{123},
+                               .event = domain::OrderAccepted{}};
 }
 
 app::PublishedEvent applied_event(std::uint64_t command_id, std::uint32_t shard) {
@@ -338,6 +349,95 @@ TEST(RiskClient, TradeEventProducesTwoExecutionReports) {
     EXPECT_TRUE(state.executions[1].is_maker());
     EXPECT_EQ(state.executions[1].trader_id(), 100U);
     EXPECT_EQ(state.executions[1].side(), v1::SIDE_SELL);
+    client.stop();
+}
+
+/// (shard_id, shard_sequence, trade_index, is_maker): ADR-0022.
+using ReportKey = std::tuple<std::uint32_t, std::uint64_t, std::uint32_t, bool>;
+
+ReportKey key_of(const v1::ExecutionReport& report) {
+    return {report.shard_id(), report.shard_sequence(), report.trade_index(), report.is_maker()};
+}
+
+TEST(RiskClient, TradesOfOneCommandGetDistinctReportKeys) {
+    SentinelState state;
+    FakeSentinel service{state};
+    ScopedServer server{0, service};
+
+    RecordingIngress ingress;
+    RiskClient client{fast_config(server.port(), 1), ingress};
+    client.start();
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.hellos >= 1; }));
+
+    // One taker sweeping three makers, then a later command with one trade.
+    const std::array events{trade_event(0, 1), trade_event(0, 1), trade_event(0, 1),
+                            trade_event(0, 2)};
+    client.on_events(events);
+
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.executions.size() >= 8; }));
+    const std::scoped_lock lock{state.mutex};
+    ASSERT_EQ(state.executions.size(), 8U);
+    std::set<ReportKey> keys;
+    for (const auto& report : state.executions) {
+        keys.insert(key_of(report));
+    }
+    EXPECT_EQ(keys.size(), 8U) << "every report is identified uniquely";
+    for (std::size_t trade = 0; trade < 3; ++trade) {
+        EXPECT_EQ(state.executions[2 * trade].trade_index(), trade) << "taker";
+        EXPECT_EQ(state.executions[2 * trade + 1].trade_index(), trade) << "maker";
+    }
+    EXPECT_EQ(state.executions[6].trade_index(), 0U) << "the next command starts again";
+    EXPECT_EQ(state.executions[7].trade_index(), 0U);
+    client.stop();
+}
+
+TEST(RiskClient, TradeIndexIsCountedPerShardWhenShardsInterleave) {
+    SentinelState state;
+    FakeSentinel service{state};
+    ScopedServer server{0, service};
+
+    RecordingIngress ingress;
+    RiskClient client{fast_config(server.port(), 2), ingress};
+    client.start();
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.hellos >= 1; }));
+
+    // Both shards sweep twice at the same sequence number; their events
+    // reach the publisher's output interleaved.
+    const std::array events{trade_event(0, 1), trade_event(1, 1), trade_event(0, 1),
+                            trade_event(1, 1)};
+    client.on_events(events);
+
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.executions.size() >= 8; }));
+    const std::scoped_lock lock{state.mutex};
+    std::set<ReportKey> keys;
+    for (const auto& report : state.executions) {
+        keys.insert(key_of(report));
+    }
+    EXPECT_EQ(keys.size(), 8U);
+    EXPECT_EQ(state.executions[4].trade_index(), 1U) << "shard 0, second trade";
+    EXPECT_EQ(state.executions[6].trade_index(), 1U) << "shard 1, second trade";
+    client.stop();
+}
+
+TEST(RiskClient, OtherEventsOfACommandAndCallBoundariesDoNotShiftTheTradeIndex) {
+    SentinelState state;
+    FakeSentinel service{state};
+    ScopedServer server{0, service};
+
+    RecordingIngress ingress;
+    RiskClient client{fast_config(server.port(), 1), ingress};
+    client.start();
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.hellos >= 1; }));
+
+    const std::array first{accepted_event(0, 3), trade_event(0, 3)};
+    const std::array second{accepted_event(0, 3), trade_event(0, 3)};
+    client.on_events(first);  // the command's events are split across two calls
+    client.on_events(second);
+
+    ASSERT_TRUE(state.wait_for([](const SentinelState& s) { return s.executions.size() >= 4; }));
+    const std::scoped_lock lock{state.mutex};
+    EXPECT_EQ(state.executions[0].trade_index(), 0U);
+    EXPECT_EQ(state.executions[2].trade_index(), 1U);
     client.stop();
 }
 
