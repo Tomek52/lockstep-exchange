@@ -60,6 +60,7 @@ Numbers and a demo.
 - [x] [018 Benchmarks with latency percentiles](docs/tasks/018-benchmarks.md)
 - [x] [019 End-to-end kill-switch scenario](docs/tasks/019-e2e-kill-switch.md)
 - [x] [021 Execution reports of one command must not collide in the sentinel's dedup](docs/tasks/021-execution-report-trade-index.md)
+- [ ] [022 Harden the end-to-end kill-switch script](docs/tasks/022-harden-e2e-kill-switch.md)
 
 ## Recommended starting order
 

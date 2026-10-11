@@ -35,6 +35,7 @@ definition of done in CLAUDE.md holds.
 | [019](019-e2e-kill-switch.md) | End-to-end kill-switch scenario | scripts, CI | 002, 004, 010, 014, 016, 017 | D |
 | [020](020-stabilize-idle-park-test.md) | Stabilise the idle-parking test under CPU load | tests/app | – | A |
 | [021](021-execution-report-trade-index.md) | Execution reports of one command must not collide in the sentinel's dedup | proto, adapters/codec, risk_client, rust/risk-sentinel | 014, 016 | C |
+| [022](022-harden-e2e-kill-switch.md) | Harden the end-to-end kill-switch script: free ports, early port and instrument checks | scripts | 019, 021 | E |
 
 ## Parallel waves
 
@@ -68,6 +69,9 @@ flowchart LR
     subgraph D["Wave D"]
         t019[019 e2e kill switch]
     end
+    subgraph E["Wave E"]
+        t022[022 harden e2e kill switch]
+    end
     t001 --> t002 --> t003
     t001 --> t004
     t008 --> t009 --> t010
@@ -79,6 +83,7 @@ flowchart LR
     t006 --> t018
     t002 & t004 & t010 & t014 & t016 & t017 --> t019
     t014 & t016 --> t021
+    t019 & t021 --> t022
 ```
 
 ## File ownership (to minimise merge conflicts)
@@ -105,6 +110,7 @@ files listed below, where the expected edit is a one-line addition.
 | `exchange-core/bench/**`, `scripts/run-benchmarks.sh` | 018 |
 | `tests/app/engine_pipeline_test.cpp` (idle-parking test), `tests/app/test_support.hpp` (wait helper) | 020 |
 | `ExecutionReport.trade_index` (`proto/lockstep/v1/risk.proto`), report dedup key in `rust/crates/risk-sentinel/src/session.rs` | 021 |
+| `scripts/e2e-kill-switch.sh` | 019, then 021 (sweep step), then 022 (hardening) |
 
 **Shared, one-line edits** (rebase and resolve trivially):
 - `app/include/lockstep/app/queues.hpp`: 005, 006.
